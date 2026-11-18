@@ -141,7 +141,7 @@ struct CameraScreen: View {
                     HStack(spacing: 4) {
                         ZStack {
                             Circle()
-                                .trim(from: 0, to: active ? model.gestureProgress?.progress ?? 0 : 0)
+                                .trim(from: 0, to: CGFloat(active ? (model.gestureProgress?.progress ?? 0) : 0))
                                 .stroke(Color.green, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                                 .rotationEffect(.degrees(-90))
                                 .frame(width: 30, height: 30)
