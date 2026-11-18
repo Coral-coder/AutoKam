@@ -49,31 +49,37 @@ struct CameraScreen: View {
                 flash.opacity(0.35).ignoresSafeArea().allowsHitTesting(false)
             }
 
-            VStack(spacing: 12) {
-                topBar
-                gestureStrip
-                Spacer()
-                if case let .countdown(n) = model.phase {
-                    Text("\(n)")
-                        .font(.system(size: 160, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .shadow(radius: 12)
-                        .transition(.scale)
-                        .id(n)
+            GeometryReader { geo in
+                if geo.size.width > geo.size.height {
+                    // Landscape: controls run down the right-hand side.
+                    HStack(spacing: 12) {
+                        VStack(spacing: 10) {
+                            topBar
+                            gestureStrip
+                            Spacer()
+                            countdownView
+                            Spacer()
+                            toastView
+                        }
+                        controls(vertical: true)
+                            .frame(width: 84)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                } else {
+                    VStack(spacing: 12) {
+                        topBar
+                        gestureStrip
+                        Spacer()
+                        countdownView
+                        Spacer()
+                        toastView
+                        controls(vertical: false)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
                 }
-                Spacer()
-                if let toast = model.toast {
-                    Text(toast.text)
-                        .font(.headline)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .foregroundStyle(toast.color)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                bottomBar
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
 
             if model.accessDenied {
                 permissionMessage
@@ -93,6 +99,48 @@ struct CameraScreen: View {
 
     // MARK: - Pieces
 
+    @ViewBuilder
+    private var countdownView: some View {
+        if case let .countdown(n) = model.phase {
+            Text("\(n)")
+                .font(.system(size: 160, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+                .shadow(radius: 12)
+                .transition(.scale)
+                .id(n)
+        }
+    }
+
+    @ViewBuilder
+    private var toastView: some View {
+        if let toast = model.toast {
+            Text(toast.text)
+                .font(.headline)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.ultraThinMaterial, in: Capsule())
+                .foregroundStyle(toast.color)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private var orientationButton: some View {
+        Button { model.cycleOrientation() } label: {
+            HStack(spacing: 5) {
+                Image(systemName: model.orientationMode == .auto
+                      ? (model.recordsLandscape ? "rectangle" : "rectangle.portrait")
+                      : model.orientationMode.symbol)
+                Text(model.orientationMode == .auto
+                     ? "Auto · \(model.recordsLandscape ? "16:9" : "9:16")"
+                     : model.orientationMode.shortLabel)
+            }
+            .font(.footnote.weight(.semibold))
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+        }
+        .foregroundStyle(.white)
+        .disabled(model.phase != .idle)
+    }
+
     private var topBar: some View {
         HStack(alignment: .top) {
             Button { showSettings = true } label: {
@@ -108,6 +156,8 @@ struct CameraScreen: View {
                 .background(.ultraThinMaterial, in: Capsule())
             }
             .foregroundStyle(.white)
+
+            orientationButton
 
             Spacer()
 
@@ -167,8 +217,9 @@ struct CameraScreen: View {
         }
     }
 
-    private var bottomBar: some View {
-        HStack(alignment: .center) {
+    private func controls(vertical: Bool) -> some View {
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+        return layout {
             Button { showTakes = true } label: {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "film.stack")
