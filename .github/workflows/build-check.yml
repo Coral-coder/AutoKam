@@ -1,0 +1,47 @@
+# Compiles the app for iOS and macOS without signing, on every push to a work branch and on PRs.
+name: Build check
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        destination: ["generic/platform=iOS", "generic/platform=macOS"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26 or later
+        run: |
+          xcode=$(ls -d /Applications/Xcode_2[6-9]*.app /Applications/Xcode_[3-9][0-9]*.app 2>/dev/null | sort -V | tail -1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+      - name: Generate project
+        run: |
+          brew install --quiet xcodegen
+          xcodegen generate
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -project AutoKam.xcodeproj -scheme AutoKam -configuration Release \
+            -destination '${{ matrix.destination }}' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > build.log 2>&1 || {
+              grep -E ': (error|warning): ' build.log | grep -v '/SourcePackages/' | sort -u | head -60 | while IFS= read -r line; do
+                echo "::error::$(echo "$line" | sed -E "s#^$GITHUB_WORKSPACE/##")"
+              done
+              tail -60 build.log
+              exit 1
+            }
+          grep -E ': warning: ' build.log | sort -u | head -40 || true
+          tail -5 build.log
