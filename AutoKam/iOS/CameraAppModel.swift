@@ -14,6 +14,43 @@ struct CaptureSettings: Codable, Equatable {
     var sendPreview = true
 }
 
+enum OrientationMode: String, CaseIterable, Identifiable {
+    case auto, portrait, landscape
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .auto: return "Follow phone"
+        case .portrait: return "Portrait 9:16"
+        case .landscape: return "Landscape 16:9"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .auto: return "Auto"
+        case .portrait: return "9:16"
+        case .landscape: return "16:9"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .auto: return "arrow.triangle.2.circlepath"
+        case .portrait: return "rectangle.portrait"
+        case .landscape: return "rectangle"
+        }
+    }
+
+    var mask: UIInterfaceOrientationMask {
+        switch self {
+        case .auto: return .allButUpsideDown
+        case .portrait: return .portrait
+        case .landscape: return .landscape
+        }
+    }
+}
+
 struct Toast: Equatable, Identifiable {
     let id = UUID()
     var text: String
@@ -39,6 +76,16 @@ final class CameraAppModel: ObservableObject {
     @Published private(set) var flashColor: Color?
     @Published private(set) var cameraReady = false
     @Published private(set) var accessDenied = false
+    /// Portrait or landscape video. The screen rotates to match.
+    @Published var orientationMode: OrientationMode {
+        didSet {
+            UserDefaults.standard.set(orientationMode.rawValue, forKey: "orientationMode")
+            OrientationLock.apply(orientationMode.mask)
+            updateCaptureAngle(rawCaptureAngle)
+        }
+    }
+    /// Whether the next (or current) take is landscape.
+    @Published private(set) var recordsLandscape = false
 
     let camera = CameraController()
     let link = PhoneLink()
@@ -61,6 +108,7 @@ final class CameraAppModel: ObservableObject {
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservers: [NSKeyValueObservation] = []
     private var captureAngle: CGFloat = 90
+    private var rawCaptureAngle: CGFloat = 90
     private var toastWork: DispatchWorkItem?
     private var started = false
 
@@ -77,6 +125,7 @@ final class CameraAppModel: ObservableObject {
             settings = CaptureSettings()
         }
         sessionName = defaults.string(forKey: "sessionName") ?? ""
+        orientationMode = OrientationMode(rawValue: defaults.string(forKey: "orientationMode") ?? "") ?? .auto
         nextNumber = max(1, defaults.integer(forKey: "nextTakeNumber"))
         currentNumber = nextNumber
         previewEnabled = settings.sendPreview
@@ -91,6 +140,7 @@ final class CameraAppModel: ObservableObject {
         started = true
         UIApplication.shared.isIdleTimerDisabled = true
         UIDevice.current.isBatteryMonitoringEnabled = true
+        OrientationLock.apply(orientationMode.mask)
         requestAccess { [weak self] granted in
             guard let self else { return }
             if granted {
@@ -162,7 +212,7 @@ final class CameraAppModel: ObservableObject {
         recordingStart = nil
         lastTakeID = take.id
         currentNumber = nextNumber
-        camera.setRotation(captureAngle)
+        updateCaptureAngle(rawCaptureAngle)
         if good {
             flash(.green)
             showToast("👍 \(take.displayName) kept", color: .green)
@@ -279,10 +329,30 @@ final class CameraAppModel: ObservableObject {
         connection.videoRotationAngle = angle
     }
 
-    private func updateCaptureAngle(_ angle: CGFloat) {
-        captureAngle = angle
+    func cycleOrientation() {
+        guard phase == .idle else { return }
+        let all = OrientationMode.allCases
+        let next = all[(all.firstIndex(of: orientationMode)! + 1) % all.count]
+        orientationMode = next
+        showToast(next.label, color: .white)
+    }
+
+    private func updateCaptureAngle(_ raw: CGFloat) {
+        rawCaptureAngle = raw
         // The orientation is fixed for the length of a take.
-        if phase != .recording { camera.setRotation(angle) }
+        guard phase != .recording else { return }
+        let angle: CGFloat
+        switch orientationMode {
+        case .auto:
+            angle = raw
+        case .portrait:
+            angle = (raw == 90 || raw == 270) ? raw : 90
+        case .landscape:
+            angle = (raw == 0 || raw == 180) ? raw : 0
+        }
+        captureAngle = angle
+        recordsLandscape = angle == 0 || angle == 180
+        camera.setRotation(angle)
     }
 
     private func settingsChanged(from old: CaptureSettings) {

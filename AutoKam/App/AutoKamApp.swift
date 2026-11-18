@@ -5,6 +5,7 @@ struct AutoKamApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     #if os(iOS)
+    @UIApplicationDelegateAdaptor(OrientationLock.self) private var orientationLock
     @StateObject private var model = CameraAppModel()
 
     var body: some Scene {
@@ -27,3 +28,27 @@ struct AutoKamApp: App {
     }
     #endif
 }
+
+#if os(iOS)
+import UIKit
+
+/// Lets the app lock the screen to portrait or landscape (or follow the phone).
+final class OrientationLock: NSObject, UIApplicationDelegate {
+    static var mask: UIInterfaceOrientationMask = .allButUpsideDown
+
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        Self.mask
+    }
+
+    static func apply(_ mask: UIInterfaceOrientationMask) {
+        self.mask = mask
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows {
+                window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+        }
+    }
+}
+#endif
