@@ -70,8 +70,8 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
             }
             session.commitConfiguration()
             if !session.isRunning { session.startRunning() }
-            let device = currentDevice
-            DispatchQueue.main.async { completion(device) }
+            let active = currentDevice
+            DispatchQueue.main.async { completion(active) }
         }
     }
 
