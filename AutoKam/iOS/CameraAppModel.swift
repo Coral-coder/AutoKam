@@ -76,6 +76,8 @@ final class CameraAppModel: ObservableObject {
     @Published private(set) var flashColor: Color?
     @Published private(set) var cameraReady = false
     @Published private(set) var accessDenied = false
+    /// Why the camera or its sound is paused (e.g. on a phone call); nil when all is well.
+    @Published private(set) var cameraNotice: String?
     /// Portrait or landscape video. The screen rotates to match.
     @Published var orientationMode: OrientationMode {
         didSet {
@@ -259,6 +261,10 @@ final class CameraAppModel: ObservableObject {
         settings.frontCamera.toggle()
     }
 
+    func resumeCamera() {
+        camera.resume()
+    }
+
     func retryTransfers() {
         didConnect()
     }
@@ -277,6 +283,9 @@ final class CameraAppModel: ObservableObject {
         }
         gestures.onGesture = { [weak self] gesture, seenAt in
             self?.handleGesture(gesture, seenAt: seenAt)
+        }
+        camera.onNotice = { [weak self] notice in
+            self?.cameraNotice = notice
         }
         camera.frameHandler = { [weak self] sampleBuffer in
             self?.processFrame(sampleBuffer)

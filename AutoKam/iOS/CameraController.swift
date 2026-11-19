@@ -1,9 +1,10 @@
 #if os(iOS)
 import AVFoundation
+import CallKit
 
 /// Owns the capture session. Video frames come out upright (rotation is applied on the
 /// connection) so recording, gesture detection and the Mac preview all see the same image.
-final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
+final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, CXCallObserverDelegate {
     let session = AVCaptureSession()
     /// Called on the capture queue for every video frame.
     var frameHandler: ((CMSampleBuffer) -> Void)?
@@ -14,6 +15,39 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     private let audioOutput = AVCaptureAudioDataOutput()
     private var videoInput: AVCaptureDeviceInput?
     private var configured = false
+    private var micInput: AVCaptureDeviceInput?
+    private var micRemovedForCall = false // session queue
+    private let callObserver = CXCallObserver()
+    private var observers: [NSObjectProtocol] = []
+
+    /// A short message about why the camera (or its sound) is paused; nil when all is well.
+    /// Called on the main queue.
+    var onNotice: ((String?) -> Void)?
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: .AVCaptureSessionWasInterrupted, object: session, queue: .main) { [weak self] note in
+            self?.handleInterruption(note)
+        })
+        observers.append(center.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.sessionQueue.async {
+                let callNotice = self.micRemovedForCall
+                DispatchQueue.main.async { self.onNotice?(callNotice ? Self.callNotice : nil) }
+            }
+        })
+        observers.append(center.addObserver(forName: .AVCaptureSessionRuntimeError, object: session, queue: .main) { [weak self] _ in
+            self?.restartSoon()
+        })
+        callObserver.setDelegate(self, queue: .main)
+    }
+
+    deinit {
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    private static let callNotice = "On a call — recording video without sound"
     private var writer: TakeWriter? // capture queue only
 
     private(set) var currentDevice: AVCaptureDevice?
@@ -26,6 +60,7 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                 if let mic = AVCaptureDevice.default(for: .audio),
                    let micInput = try? AVCaptureDeviceInput(device: mic), session.canAddInput(micInput) {
                     session.addInput(micInput)
+                    self.micInput = micInput
                 }
                 videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
                 videoOutput.alwaysDiscardsLateVideoFrames = false
@@ -81,6 +116,72 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                   connection.isVideoRotationAngleSupported(angle),
                   connection.videoRotationAngle != angle else { return }
             connection.videoRotationAngle = angle
+        }
+    }
+
+    /// Starts the camera again after a pause (e.g. the user tapped the notice).
+    func resume() {
+        sessionQueue.async { [self] in
+            if configured && !session.isRunning { session.startRunning() }
+            let callNotice = micRemovedForCall
+            DispatchQueue.main.async { self.onNotice?(callNotice ? Self.callNotice : nil) }
+        }
+    }
+
+    // MARK: - Interruptions
+
+    private func handleInterruption(_ note: Notification) {
+        let raw = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue ?? -1
+        let reason = AVCaptureSession.InterruptionReason(rawValue: raw)
+        switch reason {
+        case .audioDeviceInUseByAnotherClient?:
+            // A phone/FaceTime call has the microphone. Keep the camera going without it;
+            // the mic comes back when the call ends.
+            sessionQueue.async { [self] in
+                if let mic = micInput, session.inputs.contains(mic) {
+                    session.beginConfiguration()
+                    session.removeInput(mic)
+                    session.commitConfiguration()
+                }
+                micRemovedForCall = true
+                if !session.isRunning { session.startRunning() }
+            }
+            onNotice?(Self.callNotice)
+        case .videoDeviceInUseByAnotherClient?:
+            onNotice?("Another app is using the camera — tap to retry")
+        case .videoDeviceNotAvailableDueToSystemPressure?:
+            onNotice?("Camera paused: iPhone is too hot — tap to retry")
+        case .videoDeviceNotAvailableInBackground?:
+            break // resumes by itself when the app comes back
+        default:
+            onNotice?("Camera paused — tap to retry")
+        }
+    }
+
+    private func restartSoon() {
+        sessionQueue.asyncAfter(deadline: .now() + 1) { [self] in
+            if configured && !session.isRunning { session.startRunning() }
+        }
+    }
+
+    private func restoreMicIfPossible() {
+        let onCall = callObserver.calls.contains { !$0.hasEnded }
+        guard !onCall else { return }
+        sessionQueue.async { [self] in
+            guard micRemovedForCall, let mic = micInput else { return }
+            session.beginConfiguration()
+            if session.canAddInput(mic) { session.addInput(mic) }
+            session.commitConfiguration()
+            micRemovedForCall = false
+            if !session.isRunning { session.startRunning() }
+            DispatchQueue.main.async { self.onNotice?(nil) }
+        }
+    }
+
+    func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
+        if call.hasEnded {
+            // Give the phone call a moment to release the audio hardware.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.restoreMicIfPossible() }
         }
     }
 

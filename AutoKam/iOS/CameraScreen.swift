@@ -56,6 +56,7 @@ struct CameraScreen: View {
                         VStack(spacing: 10) {
                             topBar
                             gestureStrip
+                            noticeView
                             Spacer()
                             countdownView
                             Spacer()
@@ -70,6 +71,7 @@ struct CameraScreen: View {
                     VStack(spacing: 12) {
                         topBar
                         gestureStrip
+                        noticeView
                         Spacer()
                         countdownView
                         Spacer()
@@ -98,6 +100,19 @@ struct CameraScreen: View {
     }
 
     // MARK: - Pieces
+
+    @ViewBuilder
+    private var noticeView: some View {
+        if let notice = model.cameraNotice {
+            Button { model.resumeCamera() } label: {
+                Label(notice, systemImage: notice.hasPrefix("On a call") ? "phone.fill" : "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.85), in: Capsule())
+                    .foregroundStyle(.white)
+            }
+        }
+    }
 
     @ViewBuilder
     private var countdownView: some View {
