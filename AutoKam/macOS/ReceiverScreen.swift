@@ -4,6 +4,8 @@ import AppKit
 
 struct ReceiverScreen: View {
     @ObservedObject var model: ReceiverModel
+    @AppStorage("walkthroughSeen") private var walkthroughSeen = false
+    @State private var showWalkthrough = false
 
     var body: some View {
         HSplitView {
@@ -11,6 +13,22 @@ struct ReceiverScreen: View {
                 .frame(minWidth: 380, idealWidth: 460, maxWidth: 640)
             TakesPane(model: model)
                 .frame(minWidth: 460)
+        }
+        .toolbar {
+            ToolbarItem {
+                Button { showWalkthrough = true } label: {
+                    Label("How it works", systemImage: "questionmark.circle")
+                }
+            }
+        }
+        .sheet(isPresented: $showWalkthrough) {
+            WalkthroughView {
+                walkthroughSeen = true
+                showWalkthrough = false
+            }
+        }
+        .onAppear {
+            if !walkthroughSeen { showWalkthrough = true }
         }
     }
 }
@@ -34,6 +52,14 @@ private struct PhonePane: View {
                 Circle()
                     .fill(model.hasPhone ? Color.green : (model.listening ? Color.orange : Color.red))
                     .frame(width: 10, height: 10)
+            }
+
+            if let warning = model.phoneStatus?.warning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Color.yellow.opacity(0.85), in: Capsule())
+                    .foregroundStyle(.black)
             }
 
             ZStack {
@@ -67,7 +93,7 @@ private struct PhonePane: View {
                             Text(gesture.meaning)
                         }
                     }
-                    Text("Hold the gesture still for about a second. Takes land in All Takes; 👍 takes are also copied to Good Takes — import that folder into your editor.")
+                    Text("Show the gesture for a moment. Every take lands in All Takes; kept takes (✊ and 👍) are also copied to Good Takes with the gesture trimmed off — import that folder into your editor.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -87,6 +113,7 @@ private struct PhonePane: View {
             return model.listening ? "AutoKam is ready on this Mac" : "Starting…"
         }
         var parts = ["\(status.camera) camera", status.resolution]
+        if let mic = status.micName { parts.append("🎙 \(mic)") }
         if let battery = status.battery { parts.append("Battery \(Int(battery * 100))%") }
         if status.pendingUploads > 0 { parts.append("\(status.pendingUploads) waiting to send") }
         return parts.joined(separator: " · ")
@@ -98,14 +125,14 @@ private struct PhonePane: View {
             VStack {
                 HStack {
                     if status.recording {
-                        Label(String(format: "REC  Take %03d  %d:%02d", status.takeNumber, Int(status.elapsed) / 60, Int(status.elapsed) % 60),
+                        Label(String(format: "REC  %@  %d:%02d", Self.takeLabel(status), Int(status.elapsed) / 60, Int(status.elapsed) % 60),
                               systemImage: "record.circle.fill")
                             .font(.headline.monospacedDigit())
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(Color.red, in: Capsule())
                             .foregroundStyle(.white)
                     } else {
-                        Text(String(format: "Next: Take %03d", status.takeNumber))
+                        Text("Next: \(Self.takeLabel(status))")
                             .font(.headline.monospacedDigit())
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(.ultraThinMaterial, in: Capsule())
@@ -122,6 +149,16 @@ private struct PhonePane: View {
                     }
                 }
                 Spacer()
+                if let raw = status.lastGesture, let gesture = HandGesture(rawValue: raw),
+                   let at = status.lastGestureAt, Date().timeIntervalSince1970 - at < 1.6 {
+                    VStack(spacing: 2) {
+                        Text(gesture.emoji).font(.system(size: 64))
+                        Text(gesture.meaning).font(.headline).multilineTextAlignment(.center)
+                    }
+                    .padding(14)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                    Spacer()
+                }
                 if let countdown = status.countdown {
                     Text("\(countdown)")
                         .font(.system(size: 120, weight: .heavy, design: .rounded))
@@ -132,6 +169,13 @@ private struct PhonePane: View {
             }
             .padding(10)
         }
+    }
+
+    static func takeLabel(_ status: PhoneStatus) -> String {
+        if let segment = status.segment, let take = status.segmentTake {
+            return String(format: "Seg %02d · Take %02d", segment, take)
+        }
+        return String(format: "Take %03d", status.takeNumber)
     }
 
     private var controls: some View {
@@ -153,6 +197,15 @@ private struct PhonePane: View {
                     .frame(maxWidth: .infinity)
             }
             .keyboardShortcut("t", modifiers: .command)
+
+            Button {
+                model.send(.cut)
+            } label: {
+                Label("Cut", systemImage: "scissors")
+                    .frame(maxWidth: .infinity)
+            }
+            .keyboardShortcut("g", modifiers: .command)
+            .help("Keep this take and count in the next segment (⌘G)")
 
             Button {
                 model.send(.keep)

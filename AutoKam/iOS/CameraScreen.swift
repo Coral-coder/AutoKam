@@ -38,6 +38,16 @@ struct CameraScreen: View {
                 model.attachPreview(layer)
             }
             .ignoresSafeArea()
+            .onTapGesture(coordinateSpace: .local) { location in
+                model.focusTap(at: location)
+            }
+            .onLongPressGesture(minimumDuration: 0.6) {
+                model.resetFocus()
+            }
+
+            FocusReticle(focus: model.focus)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
 
             if model.isRecording {
                 Rectangle()
@@ -57,9 +67,7 @@ struct CameraScreen: View {
                             topBar
                             gestureStrip
                             noticeView
-                            Spacer()
-                            countdownView
-                            Spacer()
+                            middle
                             toastView
                         }
                         controls(vertical: true)
@@ -72,9 +80,7 @@ struct CameraScreen: View {
                         topBar
                         gestureStrip
                         noticeView
-                        Spacer()
-                        countdownView
-                        Spacer()
+                        middle
                         toastView
                         controls(vertical: false)
                     }
@@ -97,12 +103,63 @@ struct CameraScreen: View {
         .sheet(isPresented: $showTakes) {
             TakesView(model: model, store: store)
         }
+        .fullScreenCover(isPresented: $model.showWalkthrough) {
+            WalkthroughView { model.walkthroughDone() }
+        }
     }
 
     // MARK: - Pieces
 
-    @ViewBuilder
     private var noticeView: some View {
+        VStack(spacing: 6) {
+            MicChip(meter: model.meter)
+            if let warning = model.audioWarning {
+                Button { model.dismissWarning() } label: {
+                    Label(warning, systemImage: "mic.badge.xmark")
+                        .font(.footnote.weight(.semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Color.yellow.opacity(0.9), in: Capsule())
+                        .foregroundStyle(.black)
+                }
+                .transition(.opacity)
+            }
+            cameraNoticeView
+        }
+        .animation(.easeInOut(duration: 0.2), value: model.audioWarning)
+    }
+
+    /// Countdown, the big "gesture recognised" pop-up, and the VU meter on the right.
+    private var middle: some View {
+        ZStack {
+            VStack {
+                Spacer()
+                countdownView
+                Spacer()
+            }
+            if let recognized = model.recognized {
+                VStack(spacing: 4) {
+                    Text(recognized.gesture.emoji)
+                        .font(.system(size: 96))
+                    Text(recognized.action)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 28).padding(.vertical, 16)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28))
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+                .id(recognized.id)
+            }
+            HStack {
+                Spacer()
+                VUMeter(meter: model.meter)
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: model.recognized)
+    }
+
+    @ViewBuilder
+    private var cameraNoticeView: some View {
         if let notice = model.cameraNotice {
             Button { model.resumeCamera() } label: {
                 Label(notice, systemImage: notice.hasPrefix("On a call") ? "phone.fill" : "exclamationmark.triangle.fill")
@@ -174,11 +231,28 @@ struct CameraScreen: View {
 
             orientationButton
 
+            Button { model.showWalkthrough = true } label: {
+                Image(systemName: "questionmark.circle")
+                    .font(.title3)
+                    .padding(6)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .foregroundStyle(.white)
+
             Spacer()
 
             VStack(alignment: .trailing, spacing: 4) {
-                Text(String(format: "Take %03d", model.currentNumber))
-                    .font(.headline.monospacedDigit())
+                HStack(spacing: 6) {
+                    if model.phase == .idle {
+                        Button { model.changeSegment(by: -1) } label: { Image(systemName: "chevron.left") }
+                            .disabled(model.segment <= 1)
+                    }
+                    Text(String(format: "Seg %02d · Take %02d", model.segment, model.segmentTake))
+                        .font(.headline.monospacedDigit())
+                    if model.phase == .idle {
+                        Button { model.changeSegment(by: 1) } label: { Image(systemName: "chevron.right") }
+                    }
+                }
                 if model.isRecording, let start = model.recordingStart {
                     TimelineView(.periodic(from: start, by: 0.5)) { context in
                         Text(Self.format(context.date.timeIntervalSince(start)))
@@ -227,6 +301,7 @@ struct CameraScreen: View {
     private func label(for gesture: HandGesture) -> String {
         switch gesture {
         case .openPalm: return model.isRecording ? "Retake" : "Start"
+        case .fist: return "Cut"
         case .thumbsUp: return "Keep"
         case .peace: return "Stop"
         }
@@ -372,11 +447,25 @@ struct SettingsView: View {
                         Text("3 seconds").tag(3)
                         Text("5 seconds").tag(5)
                     }
-                    Toggle("Cut the 👍 off kept takes", isOn: $model.settings.trimGesture)
+                    Picker("Speed", selection: $model.settings.gestureSpeed) {
+                        ForEach(GestureSpeed.allCases) { speed in
+                            Text(speed.label).tag(speed)
+                        }
+                    }
+                    Toggle("Count-in beeps", isOn: $model.settings.countInBeeps)
+                    Toggle("Cut the gesture off kept takes", isOn: $model.settings.trimGesture)
                 } header: {
                     Text("Gestures")
                 } footer: {
-                    Text("Hold a gesture still for about a second.\n✋ Open hand: start recording — or, while recording, toss this take and start another.\n👍 Thumbs up: stop and keep this take (it goes in the Good Takes folder). When stopped, keeps the last take.\n✌️ Peace sign: stop without keeping.")
+                    Text("Quick reacts in about a third of a second; use Careful if gestures fire by accident.\n✋ Open hand: start — or, while recording, goofed: redo this segment.\n✊ Fist: cut — keep this take and count in the next segment.\n👍 Thumbs up: keep this take and stop.\n✌️ Peace sign: stop without keeping.\nRetakes and cuts always count in at least 2 seconds.")
+                }
+
+                Section {
+                    Toggle("Warn when the external mic isn't connected", isOn: $model.settings.warnNoExternalMic)
+                } header: {
+                    Text("Sound")
+                } footer: {
+                    Text("A small note also appears if a take starts and no sound is coming in.")
                 }
 
                 Section("Video") {
@@ -398,6 +487,10 @@ struct SettingsView: View {
                     Toggle("Delete from iPhone once on Mac", isOn: $model.settings.deleteAfterTransfer)
                     LabeledContent("Waiting to send", value: "\(store.pendingCount)")
                     Button("Send waiting takes now") { model.retryTransfers() }
+                    Button("Show the walkthrough") {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { model.showWalkthrough = true }
+                    }
                         .disabled(!link.isConnected || store.pendingCount == 0)
                 } header: {
                     Text("Storage")

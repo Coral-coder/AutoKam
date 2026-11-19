@@ -4,7 +4,7 @@ import CallKit
 
 /// Owns the capture session. Video frames come out upright (rotation is applied on the
 /// connection) so recording, gesture detection and the Mac preview all see the same image.
-final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, CXCallObserverDelegate {
+final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, CXCallObserverDelegate, AVCaptureMetadataOutputObjectsDelegate {
     let session = AVCaptureSession()
     /// Called on the capture queue for every video frame.
     var frameHandler: ((CMSampleBuffer) -> Void)?
@@ -16,6 +16,12 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     private var videoInput: AVCaptureDeviceInput?
     private var configured = false
     private var micInput: AVCaptureDeviceInput?
+    private let metadataOutput = AVCaptureMetadataOutput()
+    private var focusObservation: NSKeyValueObservation?
+    /// Faces the camera sees (for the focus target). Main queue.
+    var onFaces: (([AVMetadataObject]) -> Void)?
+    /// Whether autofocus is moving right now. Main queue.
+    var onFocusAdjusting: ((Bool) -> Void)?
     private var micRemovedForCall = false // session queue
     private let callObserver = CXCallObserver()
     private var observers: [NSObjectProtocol] = []
@@ -68,6 +74,10 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                 if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
                 audioOutput.setSampleBufferDelegate(self, queue: captureQueue)
                 if session.canAddOutput(audioOutput) { session.addOutput(audioOutput) }
+                if session.canAddOutput(metadataOutput) {
+                    session.addOutput(metadataOutput)
+                    metadataOutput.setMetadataObjectsDelegate(self, queue: .main)
+                }
             }
 
             if let old = videoInput {
@@ -82,6 +92,16 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                 videoInput = input
             }
             currentDevice = videoInput?.device
+            if metadataOutput.availableMetadataObjectTypes.contains(.face) {
+                metadataOutput.metadataObjectTypes = [.face]
+            }
+            if let device = currentDevice {
+                configureAutoFocus(device, at: nil)
+                focusObservation = device.observe(\.isAdjustingFocus, options: [.initial, .new]) { [weak self] device, _ in
+                    let adjusting = device.isAdjustingFocus
+                    DispatchQueue.main.async { self?.onFocusAdjusting?(adjusting) }
+                }
+            }
 
             if uhd && session.canSetSessionPreset(.hd4K3840x2160) {
                 session.sessionPreset = .hd4K3840x2160
@@ -117,6 +137,56 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                   connection.videoRotationAngle != angle else { return }
             connection.videoRotationAngle = angle
         }
+    }
+
+    // MARK: - Focus
+
+    /// Focus (and expose) on a point in device coordinates (0–1); nil goes back to automatic,
+    /// which follows faces.
+    func focus(at point: CGPoint?) {
+        sessionQueue.async { [self] in
+            guard let device = videoInput?.device else { return }
+            configureAutoFocus(device, at: point)
+        }
+    }
+
+    private func configureAutoFocus(_ device: AVCaptureDevice, at point: CGPoint?) {
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        let target = point ?? CGPoint(x: 0.5, y: 0.5)
+        if device.isFocusPointOfInterestSupported { device.focusPointOfInterest = target }
+        if device.isFocusModeSupported(.continuousAutoFocus) {
+            device.focusMode = .continuousAutoFocus
+        } else if device.isFocusModeSupported(.autoFocus) {
+            device.focusMode = .autoFocus
+        }
+        if device.isSmoothAutoFocusSupported { device.isSmoothAutoFocusEnabled = true }
+        if device.isExposurePointOfInterestSupported { device.exposurePointOfInterest = target }
+        if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+        // Automatic focus follows faces; a tapped point overrides that.
+        device.automaticallyAdjustsFaceDrivenAutoFocusEnabled = point == nil
+        device.automaticallyAdjustsFaceDrivenAutoExposureEnabled = point == nil
+        if point != nil {
+            device.isFaceDrivenAutoFocusEnabled = false
+            device.isFaceDrivenAutoExposureEnabled = false
+        }
+        device.unlockForConfiguration()
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        onFaces?(metadataObjects)
+    }
+
+    // MARK: - Sound
+
+    struct ChannelLevel {
+        var average: Float // dBFS
+        var peak: Float    // dBFS
+    }
+
+    /// Current microphone levels, one per channel. Main thread.
+    func audioLevels() -> [ChannelLevel] {
+        guard let connection = audioOutput.connection(with: .audio) else { return [] }
+        return connection.audioChannels.map { ChannelLevel(average: $0.averagePowerLevel, peak: $0.peakHoldLevel) }
     }
 
     /// Starts the camera again after a pause (e.g. the user tapped the notice).

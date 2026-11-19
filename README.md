@@ -9,16 +9,28 @@ One app, two jobs:
 
 Bundle ID `com.lightwave.autokam` (one universal app: iOS + macOS).
 
-## Hand gestures (hold still for about a second)
+## Hand gestures (show it for a moment; Settings → Gestures → Speed)
 
 | Gesture | Not recording | Recording |
 |---|---|---|
-| ✋ open hand | start (after a 3‑2‑1 countdown) | goofed — end this take and start a new one |
+| ✋ open hand | start (counts in) | goofed — toss this take, count in the same segment again |
+| ✊ fist | start the next segment (counts in) | **cut** — keep this take, count in the next segment |
 | 👍 thumbs up | keep the last take | stop and **keep** this take |
 | ✌️ peace sign | — | stop (not kept) |
 
-Kept takes are copied to **Good Takes**, with the thumbs‑up cut off the end. When you edit, just
-import the Good Takes folder.
+The phone pops up the gesture it recognised and what it did. Retakes and cuts always count in
+(at least 2 s, with beeps) so there's time to drop the hand. Kept takes are copied to
+**Good Takes** with the gesture cut off the end; files are named `Seg 02 - Take 03`.
+
+## On the phone screen
+
+- **Mic chip** — which mic is recording (green = external), mono/stereo. Stereo mics record stereo.
+- **VU meter** (right edge) — L/R levels with peak hold.
+- **Sound warnings** — a small yellow note if the external mic isn't connected, or if a take
+  has had no sound for 4 s. Tap to hide for 2 minutes.
+- **Focus target** — follows autofocus: green on a face, white on the centre/tapped point,
+  yellow while adjusting. Tap to focus somewhere; long‑press to go back to automatic.
+- **?** — the walkthrough (also on the Mac: toolbar → How it works).
 
 ## Where takes go on the Mac
 

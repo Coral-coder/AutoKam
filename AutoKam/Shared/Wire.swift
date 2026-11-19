@@ -22,11 +22,12 @@ enum AutoKamService {
 }
 
 enum HandGesture: String, Codable, CaseIterable {
-    case openPalm, thumbsUp, peace
+    case openPalm, fist, thumbsUp, peace
 
     var emoji: String {
         switch self {
         case .openPalm: return "✋"
+        case .fist: return "✊"
         case .thumbsUp: return "👍"
         case .peace: return "✌️"
         }
@@ -34,9 +35,10 @@ enum HandGesture: String, Codable, CaseIterable {
 
     var meaning: String {
         switch self {
-        case .openPalm: return "Start / retake"
-        case .thumbsUp: return "Keep this take"
-        case .peace: return "Stop"
+        case .openPalm: return "Start / goofed — redo this segment"
+        case .fist: return "Cut — keep it and count in the next segment"
+        case .thumbsUp: return "Keep this take and stop"
+        case .peace: return "Stop (not kept)"
         }
     }
 }
@@ -53,8 +55,16 @@ struct TakeInfo: Codable, Identifiable, Hashable {
     var good: Bool
     /// Seconds into the take where the "keep" gesture began; the good copy is cut there.
     var trimEnd: Double?
+    /// The part of the video this take belongs to, and which try at it this is.
+    var segment: Int? = nil
+    var segmentTake: Int? = nil
 
-    var displayName: String { String(format: "Take %03d", number) }
+    var displayName: String {
+        if let segment, let segmentTake {
+            return String(format: "Seg %02d - Take %02d", segment, segmentTake)
+        }
+        return String(format: "Take %03d", number)
+    }
 }
 
 struct PhoneStatus: Codable, Hashable {
@@ -68,10 +78,18 @@ struct PhoneStatus: Codable, Hashable {
     var pendingUploads: Int
     var countdown: Int?
     var battery: Double?
+    var micName: String? = nil
+    var micExternal: Bool? = nil
+    var warning: String? = nil
+    var segment: Int? = nil
+    var segmentTake: Int? = nil
+    /// The last gesture that fired, and when (seconds since 1970).
+    var lastGesture: String? = nil
+    var lastGestureAt: Double? = nil
 }
 
 enum RemoteCommand: String, Codable {
-    case record, stop, retake, keep, markLastGood
+    case record, stop, retake, keep, markLastGood, cut
 }
 
 enum Message: Codable {

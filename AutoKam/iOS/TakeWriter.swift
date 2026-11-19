@@ -11,6 +11,8 @@ final class TakeWriter: NSObject, AVAssetWriterDelegate {
         /// Wait (briefly) for frames in this orientation before starting, so a rotation
         /// change that is still being applied doesn't end up in the take.
         var expectPortrait: Bool?
+        /// 1 (mono) or 2 (stereo), matching the microphone.
+        var audioChannels: Int = 1
     }
 
     private let config: Config
@@ -144,8 +146,8 @@ final class TakeWriter: NSObject, AVAssetWriterDelegate {
         let audioSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 48_000,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 128_000,
+            AVNumberOfChannelsKey: config.audioChannels >= 2 ? 2 : 1,
+            AVEncoderBitRateKey: config.audioChannels >= 2 ? 192_000 : 128_000,
         ]
         let audio = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
         audio.expectsMediaDataInRealTime = true
