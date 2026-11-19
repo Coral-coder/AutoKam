@@ -100,8 +100,9 @@ jobs:
   upload:
     needs: plan
     if: needs.plan.outputs.build == 'true'
-    # App Store Connect only accepts builds made with the iOS 26 SDK (Xcode 26) or later.
-    runs-on: macos-26
+    # App Store Connect only accepts builds made with the iOS 26 SDK (Xcode 26) or later; the
+    # macos-15 image ships Xcode 26 and gets runners far more readily than macos-26.
+    runs-on: macos-15
     timeout-minutes: 90
     outputs:
       version: ${{ steps.decide.outputs.version }}
@@ -442,7 +443,7 @@ jobs:
   upload-macos:
     needs: [plan, upload]
     if: needs.plan.outputs.build == 'true'
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 60
     defaults:
       run:
