@@ -1,0 +1,159 @@
+# Builds the Mac app (the receiver) and publishes it as a GitHub Release: AutoKam.dmg and
+# AutoKam-mac.zip. Runs on every push to main that touches the app, and by hand from Actions.
+#
+# Signing: with the App Store Connect key in the repo secrets, the app is signed with a
+# Developer ID certificate (cloud-managed by Xcode) and notarized, so it opens with a
+# double-click. If that isn't possible (e.g. the key's role can't use Developer ID), the release
+# is an ad-hoc-signed build instead and its notes say how to open it the first time.
+name: macOS Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "AutoKam/**"
+      - "Config/**"
+      - "project.yml"
+      - ".github/workflows/macos-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+
+      - name: Generate the project
+        run: |
+          brew install --quiet xcodegen
+          xcodegen generate
+          version=$(sed -nE 's/^[[:space:]]*MARKETING_VERSION: "?([^"]+)"?/\1/p' project.yml | head -1)
+          build=$(sed -nE 's/^[[:space:]]*CURRENT_PROJECT_VERSION: "?([^"]+)"?/\1/p' project.yml | head -1)
+          echo "VERSION=${version:-1.0}" >> "$GITHUB_ENV"
+          echo "BUILD=${build:-1}" >> "$GITHUB_ENV"
+          echo "TAG=mac-v${version:-1.0}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          mkdir -p build out
+
+      - name: Install the App Store Connect API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          if [ -z "$ASC_KEY_P8" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$TEAM_ID" ]; then
+            echo "::warning::App Store Connect secrets missing; building an ad-hoc-signed release"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/AuthKey_$ASC_KEY_ID.p8"
+          chmod 600 "$RUNNER_TEMP/asc/AuthKey_$ASC_KEY_ID.p8"
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/asc/AuthKey_$ASC_KEY_ID.p8" >> "$GITHUB_ENV"
+
+      - name: Archive and sign with Developer ID
+        id: signed
+        if: env.ASC_KEY_PATH != ''
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          auth=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH"
+                -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          xcodebuild -project AutoKam.xcodeproj -scheme AutoKam -configuration Release \
+            -destination 'generic/platform=macOS' -archivePath build/AutoKam.xcarchive "${auth[@]}" \
+            DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic ENABLE_HARDENED_RUNTIME=YES \
+            ENABLE_DEBUG_DYLIB=NO ENABLE_PREVIEWS=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
+            archive > build/archive.log 2>&1 || { grep -E 'error:' build/archive.log | sort -u | head -20; tail -40 build/archive.log; exit 1; }
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>developer-id</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath build/AutoKam.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist -exportPath build/export "${auth[@]}" 2>&1 | tail -30
+          test -d build/export/AutoKam.app
+          codesign -dv --verbose=2 build/export/AutoKam.app 2>&1 | grep -E 'Authority|TeamIdentifier' || true
+
+          # Notarize and staple so it opens without warnings.
+          ditto -c -k --keepParent build/export/AutoKam.app build/notarize.zip
+          xcrun notarytool submit build/notarize.zip --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" \
+            --issuer "$ASC_ISSUER_ID" --wait --timeout 30m --output-format json | tee build/notary.json
+          status=$(python3 -c 'import json;print(json.load(open("build/notary.json")).get("status",""))')
+          if [ "$status" != "Accepted" ]; then
+            id=$(python3 -c 'import json;print(json.load(open("build/notary.json")).get("id",""))')
+            [ -n "$id" ] && xcrun notarytool log "$id" --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            echo "::error::Notarization status: $status"; exit 1
+          fi
+          xcrun stapler staple build/export/AutoKam.app
+          cp -R build/export/AutoKam.app out/AutoKam.app
+          echo "KIND=signed" >> "$GITHUB_ENV"
+
+      - name: Fallback — ad-hoc-signed build
+        if: env.KIND != 'signed'
+        run: |
+          echo "::warning::Developer ID signing/notarization didn't work; publishing an ad-hoc-signed build."
+          rm -rf out/AutoKam.app
+          xcodebuild -project AutoKam.xcodeproj -scheme AutoKam -configuration Release \
+            -destination 'generic/platform=macOS' -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            ENABLE_DEBUG_DYLIB=NO ENABLE_PREVIEWS=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
+            build > build/adhoc.log 2>&1 || { grep -E 'error:' build/adhoc.log | sort -u | head -20; tail -40 build/adhoc.log; exit 1; }
+          cp -R build/dd/Build/Products/Release/AutoKam.app out/AutoKam.app
+          codesign --force --deep --sign - --entitlements Config/AutoKam-macOS.entitlements out/AutoKam.app
+          codesign -dv out/AutoKam.app 2>&1 | head -5
+          echo "KIND=adhoc" >> "$GITHUB_ENV"
+
+      - name: Package
+        run: |
+          cd out
+          ditto -c -k --keepParent AutoKam.app AutoKam-mac.zip
+          mkdir dmg && cp -R AutoKam.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "AutoKam" -srcfolder dmg -ov -format UDZO AutoKam.dmg
+          ls -lh AutoKam-mac.zip AutoKam.dmg
+
+      - name: Publish the release
+        run: |
+          if [ "$KIND" = "signed" ]; then
+            open_note="Signed with Developer ID and notarized by Apple — double-click to open."
+          else
+            open_note="This build isn't notarized, so the first time macOS will say it can't check it. Right-click AutoKam in Applications → **Open** → **Open** (or System Settings → Privacy & Security → **Open Anyway**). After that it opens normally."
+          fi
+          cat > out/notes.md <<NOTES
+          **AutoKam for Mac** — the receiver for the AutoKam iPhone camera. Version $VERSION, build $GITHUB_RUN_NUMBER ($(git rev-parse --short HEAD)).
+
+          1. Download **AutoKam.dmg**, open it, drag AutoKam to Applications.
+          2. $open_note
+          3. Open AutoKam and allow it on the local network when asked. The iPhone app finds it on its own.
+
+          Takes are saved to \`~/Movies/AutoKam/<Session>/All Takes\` and 👍 takes to \`Good Takes\` (change the folder in the app).
+          NOTES
+          gh release create "$TAG" out/AutoKam.dmg out/AutoKam-mac.zip \
+            --target "$GITHUB_SHA" --title "AutoKam for Mac $VERSION ($GITHUB_RUN_NUMBER)" \
+            --notes-file out/notes.md --latest
+          echo "### Released $TAG ($KIND): https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove keys
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"
