@@ -1,4 +1,6 @@
-# Compiles the app for iOS and macOS without signing, on every push to a work branch and on PRs.
+# Compiles the app for iOS and macOS without signing, on PRs. One job builds both platforms,
+# because the account only gets one macOS runner at a time (a second parallel job sits in the
+# queue and gets cancelled).
 name: Build check
 
 on:
@@ -12,34 +14,36 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        destination: ["generic/platform=iOS", "generic/platform=macOS"]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 26 or later
         run: |
-          xcode=$(ls -d /Applications/Xcode_2[6-9]*.app /Applications/Xcode_[3-9][0-9]*.app 2>/dev/null | sort -V | tail -1)
+          xcode=$(ls -d /Applications/Xcode_2[6-9]*.app /Applications/Xcode_[3-9][0-9]*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
           sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
       - name: Generate project
         run: |
           brew install --quiet xcodegen
           xcodegen generate
-      - name: Build
+      - name: Build iOS and macOS
         run: |
-          set -o pipefail
-          xcodebuild -project AutoKam.xcodeproj -scheme AutoKam -configuration Release \
-            -destination '${{ matrix.destination }}' \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build > build.log 2>&1 || {
-              grep -E ': (error|warning): ' build.log | grep -v '/SourcePackages/' | sort -u | head -60 | while IFS= read -r line; do
-                echo "::error::$(echo "$line" | sed -E "s#^$GITHUB_WORKSPACE/##")"
+          status=0
+          for destination in "generic/platform=iOS" "generic/platform=macOS"; do
+            echo "::group::$destination"
+            if xcodebuild -project AutoKam.xcodeproj -scheme AutoKam -configuration Release \
+                -destination "$destination" \
+                CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+                build > build.log 2>&1; then
+              grep -E ': warning: ' build.log | sort -u | head -30 || true
+              echo "$destination: OK"
+            else
+              status=1
+              grep -E ': error: ' build.log | sort -u | head -60 | while IFS= read -r line; do
+                echo "::error::$destination: $(echo "$line" | sed -E "s#^$GITHUB_WORKSPACE/##")"
               done
-              tail -60 build.log
-              exit 1
-            }
-          grep -E ': warning: ' build.log | sort -u | head -40 || true
-          tail -5 build.log
+              tail -40 build.log
+            fi
+            echo "::endgroup::"
+          done
+          exit $status

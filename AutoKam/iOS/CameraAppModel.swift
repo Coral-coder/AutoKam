@@ -17,9 +17,9 @@ enum GestureSpeed: String, Codable, CaseIterable, Identifiable {
     /// Seconds a gesture has to be held.
     var hold: Double {
         switch self {
-        case .quick: return 0.3
-        case .normal: return 0.55
-        case .careful: return 0.9
+        case .quick: return 0.2
+        case .normal: return 0.4
+        case .careful: return 0.7
         }
     }
 }
@@ -168,7 +168,9 @@ final class CameraAppModel: ObservableObject {
         case recording
     }
 
-    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var phase: Phase = .idle {
+        didSet { if phase != oldValue { sendStatus() } }
+    }
     @Published private(set) var recordingStart: Date?
     @Published private(set) var currentNumber = 1
     @Published private(set) var sessionName: String
@@ -488,21 +490,27 @@ final class CameraAppModel: ObservableObject {
             showToast("\(take.displayName) saved", color: .white)
         }
         let trim = settings.trimGesture
-        camera.stopTake { [weak self] bytes, duration, ok in
+        camera.stopTake { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
                 var info = self.store.take(take.id)?.info ?? take
                 info.finished = true
-                info.totalBytes = bytes
-                info.duration = duration
+                info.totalBytes = result.bytes
+                info.duration = result.duration
                 info.good = info.good || good
                 if good, trim, let gestureAt, let started {
                     let end = gestureAt.timeIntervalSince(started) - 0.4
-                    if end > 0.5 && end < duration { info.trimEnd = end }
+                    if end > 0.5 && end < result.duration { info.trimEnd = end }
                 }
                 self.store.update(info)
+                // Send the finished file to the Mac straight away.
                 self.link.send(.takeInfo(info))
-                if !ok { self.showToast("\(take.displayName) didn't record properly", color: .red) }
+                if result.bytes > 0 && self.link.isConnected { self.upload(info.id, from: 0) }
+                if !result.ok {
+                    self.showToast("\(take.displayName) didn't record properly", color: .red)
+                } else if result.audioBuffers == 0 {
+                    self.showToast("⚠️ \(take.displayName) has no sound — check the mic", color: .yellow)
+                }
             }
         }
     }
@@ -677,13 +685,8 @@ final class CameraAppModel: ObservableObject {
 
         let angle = captureAngle
         camera.setRotation(angle)
-        let config = TakeWriter.Config(hevc: settings.hevc, expectPortrait: angle == 90 || angle == 270,
-                                       audioChannels: meter.isStereo ? 2 : 1)
-        let link = self.link
-        let id = info.id
-        camera.startTake(fileURL: store.fileURL(for: id), config: config) { data, offset in
-            link.sendLiveChunk(id: id, offset: offset, data: data)
-        }
+        let config = TakeWriter.Config(hevc: settings.hevc, expectPortrait: angle == 90 || angle == 270)
+        camera.startTake(fileURL: store.fileURL(for: info.id), config: config)
         recordingStart = Date()
         meter.resetSilenceTimer()
         phase = .recording
@@ -702,6 +705,9 @@ final class CameraAppModel: ObservableObject {
     }
 
     private func handleGesture(_ gesture: HandGesture, seenAt: Date) {
+        // Right after a take starts her hand may still be coming down from the last gesture;
+        // don't let that end the new take.
+        if phase == .recording, let start = recordingStart, Date().timeIntervalSince(start) < 0.8 { return }
         let action: String
         switch gesture {
         case .openPalm:
@@ -737,6 +743,9 @@ final class CameraAppModel: ObservableObject {
     }
 
     private func showRecognized(_ gesture: HandGesture, action: String) {
+        // Heard and seen the instant it registers, so she can drop her hand.
+        if settings.countInBeeps { AudioServicesPlaySystemSound(1016) }
+        flash(.green)
         recognizedWork?.cancel()
         recognized = RecognizedGesture(gesture: gesture, action: action)
         lastGestureForMac = (gesture, Date())

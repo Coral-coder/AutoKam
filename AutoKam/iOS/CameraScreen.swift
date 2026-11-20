@@ -136,10 +136,31 @@ struct CameraScreen: View {
                 countdownView
                 Spacer()
             }
+            if model.recognized == nil, let seen = model.gestureProgress {
+                // Seen — hold it a beat. Appears the instant the phone spots the hand.
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.25), lineWidth: 8)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(seen.progress))
+                        .stroke(Color.green, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Text(seen.gesture.emoji)
+                        .font(.system(size: 64))
+                }
+                .frame(width: 130, height: 130)
+                .background(.ultraThinMaterial, in: Circle())
+                .transition(.opacity)
+            }
             if let recognized = model.recognized {
                 VStack(spacing: 4) {
-                    Text(recognized.gesture.emoji)
-                        .font(.system(size: 96))
+                    ZStack(alignment: .bottomTrailing) {
+                        Text(recognized.gesture.emoji)
+                            .font(.system(size: 96))
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.white, .green)
+                    }
                     Text(recognized.action)
                         .font(.title2.weight(.bold))
                         .foregroundStyle(.white)

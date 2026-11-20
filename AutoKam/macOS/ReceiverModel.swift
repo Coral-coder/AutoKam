@@ -248,7 +248,7 @@ final class ReceiverModel: ObservableObject {
             if info.session.isEmpty { info.session = sessionName }
             let incomingDir = sessionDirectory(for: info.session).appendingPathComponent(".incoming", isDirectory: true)
             try? FileManager.default.createDirectory(at: incomingDir, withIntermediateDirectories: true)
-            let partial = incomingDir.appendingPathComponent(info.id.uuidString + ".mp4")
+            let partial = incomingDir.appendingPathComponent(info.id.uuidString + ".mov")
             FileManager.default.createFile(atPath: partial.path, contents: nil)
             takes.insert(ReceivedTake(info: info, partialPath: partial.path), at: 0)
         }
@@ -303,8 +303,8 @@ final class ReceiverModel: ObservableObject {
         handles.removeAll()
     }
 
-    /// The stream is fragmented MP4; rewrap it (no re-encode) as a regular .mov that every
-    /// editor opens, then file it.
+    /// The iPhone sends a complete QuickTime movie; file it as-is (no conversion), then check
+    /// it really has sound and how long it is.
     private func finalize(_ id: UUID) {
         guard let i = index(id), !takes[i].saved, !finalizing.contains(id) else { return }
         finalizing.insert(id)
@@ -321,25 +321,20 @@ final class ReceiverModel: ObservableObject {
         }
 
         let destination = Self.uniqueURL(in: allDir, name: take.info.displayName, ext: "mov")
+        do {
+            try FileManager.default.moveItem(at: partial, to: destination)
+        } catch {
+            finishFinalize(id, finalURL: nil, problem: "Couldn't save: \(error.localizedDescription)")
+            return
+        }
+        finishFinalize(id, finalURL: destination, problem: nil)
         Task {
-            var finalURL = destination
-            var problem: String?
-            if await Remux.export(from: partial, to: destination, end: nil) {
-                try? FileManager.default.removeItem(at: partial)
-            } else {
-                // Fall back to the stream as recorded; it still plays everywhere modern.
-                let fallback = Self.uniqueURL(in: allDir, name: take.info.displayName, ext: "mp4")
-                do {
-                    try FileManager.default.moveItem(at: partial, to: fallback)
-                    finalURL = fallback
-                } catch {
-                    problem = "Couldn't save: \(error.localizedDescription)"
-                }
-            }
-            let result = finalURL
-            let note = problem
+            let check = await Remux.inspect(destination)
             await MainActor.run {
-                self.finishFinalize(id, finalURL: note == nil ? result : nil, problem: note)
+                guard let j = self.index(id) else { return }
+                if check.duration > 0 { self.takes[j].info.duration = check.duration }
+                if !check.hasAudio { self.takes[j].problem = "No sound in this take — check the mic" }
+                self.persist()
             }
         }
     }
@@ -441,6 +436,14 @@ final class ReceiverModel: ObservableObject {
 }
 
 enum Remux {
+    /// Real duration of a movie and whether it has a sound track.
+    static func inspect(_ url: URL) async -> (duration: Double, hasAudio: Bool) {
+        let asset = AVURLAsset(url: url)
+        let duration = (try? await asset.load(.duration)).map { CMTimeGetSeconds($0) } ?? 0
+        let audio = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        return (duration.isFinite ? duration : 0, !audio.isEmpty)
+    }
+
     /// Passthrough export (no quality loss). `end` trims the take at that many seconds.
     static func export(from source: URL, to destination: URL, end: Double?) async -> Bool {
         let asset = AVURLAsset(url: source)

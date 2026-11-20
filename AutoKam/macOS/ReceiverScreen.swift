@@ -367,12 +367,12 @@ private struct TakeRow: View {
         var parts: [String] = []
         if showSession { parts.append(take.info.session) }
         if !take.info.finished {
-            parts.append("Recording… \(ByteCountFormatter.string(fromByteCount: take.have, countStyle: .file)) received")
+            parts.append("Recording on the iPhone…")
         } else {
             let seconds = Int(take.info.duration.rounded())
             parts.append(String(format: "%d:%02d", seconds / 60, seconds % 60))
             parts.append(ByteCountFormatter.string(fromByteCount: take.info.totalBytes, countStyle: .file))
-            if !take.saved { parts.append("receiving") }
+            if !take.saved { parts.append("arriving \(Int(take.progress * 100))%") }
         }
         parts.append(take.info.createdAt.formatted(date: .omitted, time: .shortened))
         return parts.joined(separator: " · ")

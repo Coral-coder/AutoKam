@@ -267,18 +267,18 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         }
     }
 
-    /// Starts writing a take. `onSegment` is called on a writer thread with each fMP4 segment.
-    func startTake(fileURL: URL, config: TakeWriter.Config, onSegment: @escaping (Data, Int64) -> Void) {
+    /// Starts writing a take to `fileURL` on the phone.
+    func startTake(fileURL: URL, config: TakeWriter.Config) {
         captureQueue.async { [self] in
-            writer = TakeWriter(fileURL: fileURL, config: config, onSegment: onSegment)
+            writer = TakeWriter(fileURL: fileURL, config: config)
         }
     }
 
-    /// Ends the take. Calls back (on a background thread) with (bytes, duration, success).
-    func stopTake(_ completion: @escaping (Int64, Double, Bool) -> Void) {
+    /// Ends the take. Calls back on a background thread once the file is complete.
+    func stopTake(_ completion: @escaping (TakeWriter.Result) -> Void) {
         captureQueue.async { [self] in
             guard let current = writer else {
-                completion(0, 0, false)
+                completion(TakeWriter.Result(bytes: 0, duration: 0, ok: false, audioBuffers: 0))
                 return
             }
             writer = nil
