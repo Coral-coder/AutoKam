@@ -49,6 +49,10 @@ struct CameraScreen: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
+            if model.settings.showLevel {
+                LevelIndicator(level: model.level)
+            }
+
             if model.isRecording {
                 Rectangle()
                     .strokeBorder(Color.red, lineWidth: 6)
@@ -502,6 +506,7 @@ struct SettingsView: View {
                     .disabled(model.phase != .idle)
                     Toggle("Smaller files (HEVC)", isOn: $model.settings.hevc)
                     Toggle("Live view on Mac", isOn: $model.settings.sendPreview)
+                    Toggle("Show level", isOn: $model.settings.showLevel)
                 }
 
                 Section {

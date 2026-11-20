@@ -36,6 +36,7 @@ struct CaptureSettings: Codable, Equatable {
     var gestureSpeed = GestureSpeed.quick
     var countInBeeps = true
     var warnNoExternalMic = true
+    var showLevel = true
 
     init() {}
 
@@ -54,6 +55,7 @@ struct CaptureSettings: Codable, Equatable {
         gestureSpeed = try c.decodeIfPresent(GestureSpeed.self, forKey: .gestureSpeed) ?? d.gestureSpeed
         countInBeeps = try c.decodeIfPresent(Bool.self, forKey: .countInBeeps) ?? d.countInBeeps
         warnNoExternalMic = try c.decodeIfPresent(Bool.self, forKey: .warnNoExternalMic) ?? d.warnNoExternalMic
+        showLevel = try c.decodeIfPresent(Bool.self, forKey: .showLevel) ?? d.showLevel
     }
 }
 
@@ -205,6 +207,7 @@ final class CameraAppModel: ObservableObject {
 
     let meter = AudioMeter()
     let focus = FocusTracker()
+    let level = LevelMeter()
 
     let camera = CameraController()
     let link = PhoneLink()
@@ -282,6 +285,7 @@ final class CameraAppModel: ObservableObject {
         // Count-in beeps play while the microphone is live.
         try? AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(true)
         meter.updateRoute()
+        level.start()
         routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.routeChanged()
         }

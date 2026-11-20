@@ -21,6 +21,7 @@ enum Walkthrough {
             "Choose the shape at the top: Auto, 9:16 (portrait) or 16:9 (landscape). The screen turns to match.",
             "Focus: the box shows where the camera is focusing. Green means it's on your face, yellow means it's adjusting.",
             "Tap the screen to focus on a spot. Hold your finger down to go back to automatic.",
+            "Level: the line across the middle follows the real horizon. Tilt until it turns green and says LEVEL. It works in portrait and landscape.",
         ]),
         WalkthroughPage(symbol: "mic.fill", title: "3 · Sound", lines: [
             "Plug in the external mic receiver. The chip at the top shows which mic is recording, in green when it's the external one.",

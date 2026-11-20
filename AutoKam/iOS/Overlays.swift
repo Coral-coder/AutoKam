@@ -120,3 +120,73 @@ struct MicChip: View {
     }
 }
 #endif
+
+#if os(iOS)
+import CoreMotion
+
+/// How far the phone is tilted off level (roll), whichever way it's held.
+final class LevelMeter: ObservableObject {
+    /// Degrees off level; nil when the phone is lying flat and roll means nothing.
+    @Published private(set) var degrees: Double?
+    private let motion = CMMotionManager()
+    private var smoothed: Double?
+
+    func start() {
+        guard motion.isDeviceMotionAvailable, !motion.isDeviceMotionActive else { return }
+        motion.deviceMotionUpdateInterval = 1.0 / 30
+        motion.startDeviceMotionUpdates(to: .main) { [weak self] data, _ in
+            guard let self, let g = data?.gravity else { return }
+            if abs(g.z) > 0.9 {
+                if self.degrees != nil { self.degrees = nil; self.smoothed = nil }
+                return
+            }
+            // Direction of gravity on the screen, then how far it is from the nearest
+            // straight down (portrait, upside down, or either landscape).
+            let angle = atan2(g.y, g.x) * 180 / .pi
+            var off = angle.truncatingRemainder(dividingBy: 90)
+            if off > 45 { off -= 90 } else if off < -45 { off += 90 }
+            let value = self.smoothed.map { $0 * 0.75 + off * 0.25 } ?? off
+            self.smoothed = value
+            if let current = self.degrees, abs(current - value) < 0.1 { return }
+            self.degrees = value
+        }
+    }
+
+    func stop() { motion.stopDeviceMotionUpdates() }
+}
+
+/// A horizon line across the middle of the frame: it stays parallel to the real horizon and
+/// turns green when the phone is level.
+struct LevelIndicator: View {
+    @ObservedObject var level: LevelMeter
+
+    var body: some View {
+        if let degrees = level.degrees {
+            let isLevel = abs(degrees) < 0.7
+            let color: Color = isLevel ? .green : .white
+            ZStack {
+                // Fixed marks: where level is.
+                HStack {
+                    Capsule().fill(color.opacity(0.9)).frame(width: 26, height: 3)
+                    Spacer()
+                    Capsule().fill(color.opacity(0.9)).frame(width: 26, height: 3)
+                }
+                .frame(width: 260)
+                // The real horizon.
+                Capsule()
+                    .fill(color)
+                    .frame(width: 180, height: isLevel ? 3 : 2)
+                    .rotationEffect(.degrees(isLevel ? 0 : -degrees))
+                    .shadow(color: .black.opacity(0.5), radius: 1)
+                Text(isLevel ? "LEVEL" : String(format: "%.1f°", abs(degrees)))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(color)
+                    .shadow(color: .black.opacity(0.6), radius: 1)
+                    .offset(y: 16)
+            }
+            .animation(.easeOut(duration: 0.1), value: degrees)
+            .allowsHitTesting(false)
+        }
+    }
+}
+#endif
