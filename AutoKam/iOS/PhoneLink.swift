@@ -69,13 +69,6 @@ final class PhoneLink: ObservableObject {
         peer.send(message, payload: payload, completion: completion)
     }
 
-    /// Thread-safe. Live segments are dropped when the link is backed up; the Mac asks for
-    /// whatever it's missing once the take is finished.
-    func sendLiveChunk(id: UUID, offset: Int64, data: Data) {
-        guard let peer = currentReadyPeer(), peer.bytesInFlight < 32 << 20 else { return }
-        peer.send(.chunk(id: id, offset: offset), payload: data)
-    }
-
     /// Thread-safe. Previews are skipped whenever anything else is waiting to go out.
     func sendPreview(_ jpeg: Data) {
         guard let peer = currentReadyPeer(), peer.bytesInFlight < 1 << 20 else { return }

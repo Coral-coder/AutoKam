@@ -27,7 +27,13 @@ final class TakeStore: ObservableObject {
     var lastTake: LocalTake? { takes.last }
 
     func fileURL(for id: UUID) -> URL {
-        directory.appendingPathComponent(id.uuidString + ".mp4")
+        let mov = directory.appendingPathComponent(id.uuidString + ".mov")
+        // Takes recorded by the first builds were .mp4.
+        let legacy = directory.appendingPathComponent(id.uuidString + ".mp4")
+        if !FileManager.default.fileExists(atPath: mov.path) && FileManager.default.fileExists(atPath: legacy.path) {
+            return legacy
+        }
+        return mov
     }
 
     func take(_ id: UUID) -> LocalTake? {
