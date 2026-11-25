@@ -17,9 +17,9 @@ enum GestureSpeed: String, Codable, CaseIterable, Identifiable {
     /// Seconds a gesture has to be held.
     var hold: Double {
         switch self {
-        case .quick: return 0.2
-        case .normal: return 0.4
-        case .careful: return 0.7
+        case .quick: return 0.35
+        case .normal: return 0.55
+        case .careful: return 0.85
         }
     }
 }
@@ -33,7 +33,9 @@ struct CaptureSettings: Codable, Equatable {
     var deleteAfterTransfer = true
     var frontCamera = true
     var sendPreview = true
-    var gestureSpeed = GestureSpeed.quick
+    var gestureSpeed = GestureSpeed.normal
+    /// Gestures switched off (raw values).
+    var disabledGestures: [String] = []
     var countInBeeps = true
     var warnNoExternalMic = true
     var showLevel = true
@@ -53,6 +55,11 @@ struct CaptureSettings: Codable, Equatable {
         frontCamera = try c.decodeIfPresent(Bool.self, forKey: .frontCamera) ?? d.frontCamera
         sendPreview = try c.decodeIfPresent(Bool.self, forKey: .sendPreview) ?? d.sendPreview
         gestureSpeed = try c.decodeIfPresent(GestureSpeed.self, forKey: .gestureSpeed) ?? d.gestureSpeed
+        disabledGestures = try c.decodeIfPresent([String].self, forKey: .disabledGestures) ?? d.disabledGestures
+        // Builds before the stricter recognizer defaulted to Quick, which fired far too easily.
+        if try c.decodeIfPresent([String].self, forKey: .disabledGestures) == nil, gestureSpeed == .quick {
+            gestureSpeed = .normal
+        }
         countInBeeps = try c.decodeIfPresent(Bool.self, forKey: .countInBeeps) ?? d.countInBeeps
         warnNoExternalMic = try c.decodeIfPresent(Bool.self, forKey: .warnNoExternalMic) ?? d.warnNoExternalMic
         showLevel = try c.decodeIfPresent(Bool.self, forKey: .showLevel) ?? d.showLevel
@@ -298,6 +305,21 @@ final class CameraAppModel: ObservableObject {
             guard let self else { return }
             self.meter.update(self.camera.audioLevels())
         }
+    }
+
+    func isGestureOn(_ gesture: HandGesture) -> Bool {
+        !settings.disabledGestures.contains(gesture.rawValue)
+    }
+
+    func setGesture(_ gesture: HandGesture, on: Bool) {
+        settings.disabledGestures.removeAll { $0 == gesture.rawValue }
+        if !on { settings.disabledGestures.append(gesture.rawValue) }
+    }
+
+    /// One tap on the gesture strip pauses or resumes gestures.
+    func toggleGestures() {
+        settings.gesturesEnabled.toggle()
+        showToast(settings.gesturesEnabled ? "Gestures on" : "Gestures paused", color: .white)
     }
 
     func walkthroughDone() {
@@ -555,6 +577,7 @@ final class CameraAppModel: ObservableObject {
 
     private func wire() {
         gestures.holdDuration = settings.gestureSpeed.hold
+        gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         camera.onFaces = { [weak self] objects in self?.updateFaces(objects) }
         camera.onFocusAdjusting = { [weak self] adjusting in
             if self?.focus.adjusting != adjusting { self?.focus.adjusting = adjusting }
@@ -652,6 +675,7 @@ final class CameraAppModel: ObservableObject {
             UserDefaults.standard.set(data, forKey: "settings")
         }
         gestures.holdDuration = settings.gestureSpeed.hold
+        gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.enabled = settings.gesturesEnabled
         if !settings.gesturesEnabled { gestureProgress = nil }
         previewEnabled = settings.sendPreview

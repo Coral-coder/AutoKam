@@ -33,7 +33,8 @@ enum Walkthrough {
             "✊  Fist: cut. This take is kept, then the next segment counts in, so there's time to drop your hand.",
             "👍  Thumbs up: keep this take and stop. (When stopped, it keeps the last take.)",
             "✌️  Peace sign: stop without keeping.",
-            "Show the gesture for a moment. The phone pops up the gesture it saw and what it did. Speed: Settings → Gestures.",
+            "Hold the hand up, clearly, and keep it still for about half a second. A ring fills while it's being read, then a ✓ and a sound confirm it. Moving or resting hands are ignored.",
+            "Tap the gesture bar at the top to pause gestures. Each gesture can be switched off in Settings → Gestures.",
         ]),
         WalkthroughPage(symbol: "film.stack", title: "5 · Segments and takes", lines: [
             "A video is built from segments, and each segment can take a few tries.",
