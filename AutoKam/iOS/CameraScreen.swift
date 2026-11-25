@@ -296,31 +296,36 @@ struct CameraScreen: View {
         }
     }
 
-    @ViewBuilder
     private var gestureStrip: some View {
-        if model.settings.gesturesEnabled {
-            HStack(spacing: 14) {
-                ForEach(HandGesture.allCases, id: \.self) { gesture in
-                    let active = model.gestureProgress?.gesture == gesture
-                    HStack(spacing: 4) {
-                        ZStack {
-                            Circle()
-                                .trim(from: 0, to: CGFloat(active ? (model.gestureProgress?.progress ?? 0) : 0))
-                                .stroke(Color.green, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                                .rotationEffect(.degrees(-90))
-                                .frame(width: 30, height: 30)
-                            Text(gesture.emoji).font(.system(size: active ? 20 : 16))
+        Button { model.toggleGestures() } label: {
+            if model.settings.gesturesEnabled {
+                HStack(spacing: 14) {
+                    ForEach(HandGesture.allCases.filter { model.isGestureOn($0) }, id: \.self) { gesture in
+                        let active = model.gestureProgress?.gesture == gesture
+                        HStack(spacing: 4) {
+                            ZStack {
+                                Circle()
+                                    .trim(from: 0, to: CGFloat(active ? (model.gestureProgress?.progress ?? 0) : 0))
+                                    .stroke(Color.green, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                    .rotationEffect(.degrees(-90))
+                                    .frame(width: 30, height: 30)
+                                Text(gesture.emoji).font(.system(size: active ? 20 : 16))
+                            }
+                            Text(label(for: gesture))
+                                .font(.caption2.weight(.semibold))
                         }
-                        Text(label(for: gesture))
-                            .font(.caption2.weight(.semibold))
+                        .opacity(active ? 1 : 0.75)
                     }
-                    .opacity(active ? 1 : 0.75)
                 }
+            } else {
+                Label("Gestures paused — tap to turn on", systemImage: "hand.raised.slash")
+                    .font(.caption.weight(.semibold))
+                    .padding(.vertical, 6)
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12).padding(.vertical, 4)
-            .background(.ultraThinMaterial, in: Capsule())
         }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12).padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: Capsule())
     }
 
     private func label(for gesture: HandGesture) -> String {
@@ -467,6 +472,14 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("Hand gestures", isOn: $model.settings.gesturesEnabled)
+                    ForEach(HandGesture.allCases, id: \.self) { gesture in
+                        Toggle("\(gesture.emoji)  \(gesture.meaning)", isOn: Binding(
+                            get: { model.isGestureOn(gesture) },
+                            set: { model.setGesture(gesture, on: $0) }
+                        ))
+                        .font(.subheadline)
+                        .disabled(!model.settings.gesturesEnabled)
+                    }
                     Picker("Countdown", selection: $model.settings.countdown) {
                         Text("Off").tag(0)
                         Text("3 seconds").tag(3)
@@ -482,7 +495,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Gestures")
                 } footer: {
-                    Text("Quick reacts in about a third of a second; use Careful if gestures fire by accident.\n✋ Open hand: start — or, while recording, goofed: redo this segment.\n✊ Fist: cut — keep this take and count in the next segment.\n👍 Thumbs up: keep this take and stop.\n✌️ Peace sign: stop without keeping.\nRetakes and cuts always count in at least 2 seconds.")
+                    Text("A gesture counts only when it's clear, the hand is held up and kept still for the hold time (Normal ≈ half a second). Moving hands, talking with your hands or resting hands are ignored. Tap the gesture bar on the camera screen to pause gestures. Use Careful if anything still fires by accident.\n✋ Open hand: start — or, while recording, goofed: redo this segment.\n✊ Fist: cut — keep this take and count in the next segment.\n👍 Thumbs up: keep this take and stop.\n✌️ Peace sign: stop without keeping.\nRetakes and cuts always count in at least 2 seconds.")
                 }
 
                 Section {
@@ -507,6 +520,7 @@ struct SettingsView: View {
                     Toggle("Smaller files (HEVC)", isOn: $model.settings.hevc)
                     Toggle("Live view on Mac", isOn: $model.settings.sendPreview)
                     Toggle("Show level", isOn: $model.settings.showLevel)
+                    Toggle("Focus on things I hold up", isOn: $model.settings.focusOnShownObjects)
                 }
 
                 Section {

@@ -21,6 +21,7 @@ enum Walkthrough {
             "Choose the shape at the top: Auto, 9:16 (portrait) or 16:9 (landscape). The screen turns to match.",
             "Focus: the box shows where the camera is focusing. Green means it's on your face, yellow means it's adjusting.",
             "Tap the screen to focus on a spot. Hold your finger down to go back to automatic.",
+            "Showing a product: hold it up in front of your open hand for a moment. Focus jumps to it (blue box, OBJECT) and gestures are ignored while your hand is up. Lower your hand out of frame and focus goes back to your face.",
             "Level: the line across the middle follows the real horizon. Tilt until it turns green and says LEVEL. It works in portrait and landscape.",
         ]),
         WalkthroughPage(symbol: "mic.fill", title: "3 · Sound", lines: [
@@ -33,7 +34,8 @@ enum Walkthrough {
             "✊  Fist: cut. This take is kept, then the next segment counts in, so there's time to drop your hand.",
             "👍  Thumbs up: keep this take and stop. (When stopped, it keeps the last take.)",
             "✌️  Peace sign: stop without keeping.",
-            "Show the gesture for a moment. The phone pops up the gesture it saw and what it did. Speed: Settings → Gestures.",
+            "Hold the hand up, clearly, and keep it still for about half a second. A ring fills while it's being read, then a ✓ and a sound confirm it. Moving or resting hands are ignored.",
+            "Tap the gesture bar at the top to pause gestures. Each gesture can be switched off in Settings → Gestures.",
         ]),
         WalkthroughPage(symbol: "film.stack", title: "5 · Segments and takes", lines: [
             "A video is built from segments, and each segment can take a few tries.",

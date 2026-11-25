@@ -9,7 +9,7 @@ One app, two jobs:
 
 Bundle ID `com.lightwave.autokam` (one universal app: iOS + macOS).
 
-## Hand gestures (show it for a moment; Settings → Gestures → Speed)
+## Hand gestures (hold it up and still for ~½ s; Settings → Gestures)
 
 | Gesture | Not recording | Recording |
 |---|---|---|
