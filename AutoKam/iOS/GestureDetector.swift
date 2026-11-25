@@ -39,6 +39,18 @@ final class GestureDetector {
 
     /// Gestures she's switched off in Settings.
     var disabled: Set<HandGesture> = []
+    /// Notice a hand holding something up to the camera (and ignore gestures meanwhile).
+    var detectShowing = true
+    /// Where a shown object is, in upright frame coordinates (0–1, origin top-left), or nil
+    /// once the hand has gone. Main queue.
+    var onShowing: ((CGPoint?) -> Void)?
+
+    // Showing an object (vision queue)
+    private var showingActive = false
+    private var showingSince: CFTimeInterval = 0
+    private var showingAnchor: CGPoint?
+    private var lastHandSeen: CFTimeInterval = 0
+    private var lastShownPoint: CGPoint?
 
     private struct Sighting {
         var gesture: HandGesture
@@ -65,16 +77,23 @@ final class GestureDetector {
         queue.async { [self] in
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
             var found: Sighting?
+            var shown: (point: CGPoint, scale: CGFloat)?
+            var handSeen = false
+            let aspect = height > 0 ? width / height : 1
             if (try? handler.perform([request])) != nil, let hands = request.results {
-                let aspect = height > 0 ? width / height : 1
-                for hand in hands {
-                    if let sighting = Self.classify(hand, aspect: aspect), !disabled.contains(sighting.gesture) {
-                        found = sighting
-                        break
+                for hand in hands where hand.confidence >= 0.3 {
+                    handSeen = true
+                    if let sighting = Self.classify(hand, aspect: aspect) {
+                        if !disabled.contains(sighting.gesture) && found == nil { found = sighting }
+                    } else if shown == nil, let object = Self.showingObject(hand, aspect: aspect) {
+                        shown = object
                     }
                 }
             }
-            update(found, now: CACurrentMediaTime())
+            let now = CACurrentMediaTime()
+            updateShowing(shown, handSeen: handSeen, aspect: aspect, now: now)
+            // While she's holding something up, nothing that hand does is a gesture.
+            update(showingActive ? nil : found, now: now)
             lock.lock(); busy = false; lock.unlock()
         }
     }
@@ -127,6 +146,49 @@ final class GestureDetector {
         } else {
             report(GestureProgress(gesture: sighting.gesture, progress: min(progress, 0.95)))
         }
+    }
+
+    private func updateShowing(_ shown: (point: CGPoint, scale: CGFloat)?, handSeen: Bool, aspect: CGFloat, now: CFTimeInterval) {
+        guard detectShowing else {
+            if showingActive { showingActive = false; reportShowing(nil) }
+            return
+        }
+        if handSeen { lastHandSeen = now }
+        if let shown {
+            if showingActive {
+                // Follow the object if it moves.
+                if let last = lastShownPoint, Hand.d(last, shown.point) > 0.04 {
+                    lastShownPoint = shown.point
+                    reportShowing(shown.point, aspect: aspect)
+                }
+            } else if let anchor = showingAnchor, Hand.d(anchor, shown.point) < shown.scale * 0.5 {
+                if now - showingSince > 0.5 {
+                    showingActive = true
+                    lastShownPoint = shown.point
+                    reset()
+                    report(nil)
+                    reportShowing(shown.point, aspect: aspect)
+                }
+            } else {
+                showingAnchor = shown.point
+                showingSince = now
+            }
+        } else if !showingActive {
+            showingAnchor = nil
+        }
+        // Done showing once the hand has left the frame.
+        if showingActive && now - lastHandSeen > 0.7 {
+            showingActive = false
+            showingAnchor = nil
+            lastShownPoint = nil
+            reportShowing(nil)
+        }
+    }
+
+    /// Converts from square coordinates (y up) to frame coordinates (0–1, origin top-left).
+    private func reportShowing(_ point: CGPoint?, aspect: CGFloat = 1) {
+        let framePoint = point.map { CGPoint(x: $0.x / max(aspect, 0.01), y: 1 - $0.y) }
+        DispatchQueue.main.async { self.onShowing?(framePoint) }
     }
 
     private func report(_ progress: GestureProgress?) {
@@ -198,6 +260,28 @@ final class GestureDetector {
                 && thumbTip.y > thumbIP.y && thumbIP.y > thumbMP.y
                 && others.allSatisfy { thumbTip.y > $0.y + scale * 0.25 }
         }
+    }
+
+    /// A raised hand that's partly hidden — something held up in front of the palm. Returns the
+    /// middle of the hand (where the object is) in square coordinates, and the hand's size.
+    private static func showingObject(_ observation: VNHumanHandPoseObservation, aspect: CGFloat) -> (point: CGPoint, scale: CGFloat)? {
+        guard let points = try? observation.recognizedPoints(.all), points.count >= 15 else { return nil }
+        let all = Array(points.values)
+        let hidden = all.filter { $0.confidence < 0.3 }.count
+        guard hidden >= 5 else { return nil } // a clear, uncovered hand isn't showing anything
+        func sq(_ p: VNRecognizedPoint) -> CGPoint { CGPoint(x: p.location.x * aspect, y: p.location.y) }
+        guard let wrist = points[.wrist], wrist.confidence >= 0.3 else { return nil }
+        let knuckles = [VNHumanHandPoseObservation.JointName.indexMCP, .middleMCP, .ringMCP, .littleMCP]
+            .compactMap { points[$0] }
+        guard knuckles.count == 4 else { return nil }
+        let center = CGPoint(x: all.map { sq($0).x }.reduce(0, +) / CGFloat(all.count),
+                             y: all.map { sq($0).y }.reduce(0, +) / CGFloat(all.count))
+        let scale = Hand.d(sq(wrist), sq(knuckles[1]))
+        // Close enough to be presenting something, held up, and not just poking in at the edge.
+        let raw = CGPoint(x: center.x / max(aspect, 0.01), y: center.y)
+        guard scale > 0.05, sq(knuckles[1]).y > sq(wrist).y,
+              raw.x > 0.08, raw.x < 0.92, raw.y > 0.08, raw.y < 0.92 else { return nil }
+        return (center, scale)
     }
 
     private static func classify(_ observation: VNHumanHandPoseObservation, aspect: CGFloat) -> Sighting? {

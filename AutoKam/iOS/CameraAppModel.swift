@@ -39,6 +39,7 @@ struct CaptureSettings: Codable, Equatable {
     var countInBeeps = true
     var warnNoExternalMic = true
     var showLevel = true
+    var focusOnShownObjects = true
 
     init() {}
 
@@ -63,6 +64,7 @@ struct CaptureSettings: Codable, Equatable {
         countInBeeps = try c.decodeIfPresent(Bool.self, forKey: .countInBeeps) ?? d.countInBeeps
         warnNoExternalMic = try c.decodeIfPresent(Bool.self, forKey: .warnNoExternalMic) ?? d.warnNoExternalMic
         showLevel = try c.decodeIfPresent(Bool.self, forKey: .showLevel) ?? d.showLevel
+        focusOnShownObjects = try c.decodeIfPresent(Bool.self, forKey: .focusOnShownObjects) ?? d.focusOnShownObjects
     }
 }
 
@@ -108,7 +110,7 @@ final class AudioMeter: ObservableObject {
 
 /// Where the camera is focusing, in preview (screen) coordinates.
 final class FocusTracker: ObservableObject {
-    enum Mode { case auto, face, manual }
+    enum Mode { case auto, face, manual, object }
     @Published private(set) var rect: CGRect?
     @Published private(set) var mode: Mode = .auto
     @Published var adjusting = false
@@ -242,6 +244,8 @@ final class CameraAppModel: ObservableObject {
     private var recognizedWork: DispatchWorkItem?
     private var meterTimer: Timer?
     private var manualFocusPoint: CGPoint?
+    /// Focus point of something she's holding up to the camera.
+    private var objectFocusPoint: CGPoint?
     private var lastFaceAt = Date.distantPast
     private var snoozedWarning: (text: String, until: Date)?
     private var lastGestureForMac: (HandGesture, Date)?
@@ -428,6 +432,7 @@ final class CameraAppModel: ObservableObject {
         guard let layer = previewLayer else { return }
         let devicePoint = layer.captureDevicePointConverted(fromLayerPoint: point)
         manualFocusPoint = devicePoint
+        objectFocusPoint = nil
         camera.focus(at: devicePoint)
         focus.set(CGRect(x: point.x - 45, y: point.y - 45, width: 90, height: 90), mode: .manual)
     }
@@ -435,14 +440,33 @@ final class CameraAppModel: ObservableObject {
     /// Long-press: back to automatic focus (follows her face).
     func resetFocus() {
         manualFocusPoint = nil
+        objectFocusPoint = nil
         camera.focus(at: nil)
         lastFaceAt = .distantPast
         refreshAutoFocusTarget()
         showToast("Autofocus", color: .white)
     }
 
+    /// She's holding something up (point in frame coordinates), or has put it away (nil).
+    private func showingChanged(_ framePoint: CGPoint?) {
+        guard manualFocusPoint == nil else { return } // a tapped focus point wins
+        if let framePoint {
+            let wasShowing = objectFocusPoint != nil
+            let devicePoint = camera.devicePoint(forFramePoint: framePoint)
+            objectFocusPoint = devicePoint
+            camera.focus(at: devicePoint)
+            refreshAutoFocusTarget()
+            if !wasShowing { gestureProgress = nil }
+        } else if objectFocusPoint != nil {
+            objectFocusPoint = nil
+            camera.focus(at: nil) // back to following her face
+            lastFaceAt = .distantPast
+            refreshAutoFocusTarget()
+        }
+    }
+
     private func updateFaces(_ objects: [AVMetadataObject]) {
-        guard manualFocusPoint == nil, let layer = previewLayer else { return }
+        guard manualFocusPoint == nil, objectFocusPoint == nil, let layer = previewLayer else { return }
         let faces = objects.compactMap { $0 as? AVMetadataFaceObject }
         guard let face = faces.max(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }),
               let converted = layer.transformedMetadataObject(for: face) else { return }
@@ -456,6 +480,9 @@ final class CameraAppModel: ObservableObject {
         if let manual = manualFocusPoint {
             let p = layer.layerPointConverted(fromCaptureDevicePoint: manual)
             focus.set(CGRect(x: p.x - 45, y: p.y - 45, width: 90, height: 90), mode: .manual)
+        } else if let object = objectFocusPoint {
+            let p = layer.layerPointConverted(fromCaptureDevicePoint: object)
+            focus.set(CGRect(x: p.x - 55, y: p.y - 55, width: 110, height: 110), mode: .object)
         } else if Date().timeIntervalSince(lastFaceAt) > 0.6 {
             let p = layer.layerPointConverted(fromCaptureDevicePoint: CGPoint(x: 0.5, y: 0.5))
             focus.set(CGRect(x: p.x - 60, y: p.y - 60, width: 120, height: 120), mode: .auto)
@@ -578,6 +605,8 @@ final class CameraAppModel: ObservableObject {
     private func wire() {
         gestures.holdDuration = settings.gestureSpeed.hold
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
+        gestures.detectShowing = settings.focusOnShownObjects
+        gestures.onShowing = { [weak self] point in self?.showingChanged(point) }
         camera.onFaces = { [weak self] objects in self?.updateFaces(objects) }
         camera.onFocusAdjusting = { [weak self] adjusting in
             if self?.focus.adjusting != adjusting { self?.focus.adjusting = adjusting }
@@ -676,6 +705,7 @@ final class CameraAppModel: ObservableObject {
         }
         gestures.holdDuration = settings.gestureSpeed.hold
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
+        gestures.detectShowing = settings.focusOnShownObjects
         gestures.enabled = settings.gesturesEnabled
         if !settings.gesturesEnabled { gestureProgress = nil }
         previewEnabled = settings.sendPreview

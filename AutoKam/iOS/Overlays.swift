@@ -9,12 +9,19 @@ struct FocusReticle: View {
     var body: some View {
         GeometryReader { _ in
             if let rect = focus.rect {
-                let color: Color = focus.adjusting ? .yellow : (focus.mode == .face ? .green : .white)
+                let color: Color = focus.adjusting ? .yellow
+                    : focus.mode == .face ? .green
+                    : focus.mode == .object ? .cyan : .white
                 ZStack(alignment: .topLeading) {
                     FocusBrackets()
                         .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                         .shadow(color: .black.opacity(0.5), radius: 2)
-                    if focus.mode == .manual {
+                    if focus.mode == .object {
+                        Text("OBJECT")
+                            .font(.system(size: 10, weight: .heavy))
+                            .foregroundStyle(color)
+                            .offset(x: 4, y: -14)
+                    } else if focus.mode == .manual {
                         Text("AF")
                             .font(.system(size: 10, weight: .heavy))
                             .foregroundStyle(color)

@@ -176,6 +176,17 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         onFaces?(metadataObjects)
     }
 
+    /// Size of the (upright) frames, for converting positions found in them.
+    private var frameSize = CGSize(width: 1080, height: 1920)
+
+    /// A point in the upright frame (0–1, origin top-left) as a focus point of interest.
+    func devicePoint(forFramePoint point: CGPoint) -> CGPoint {
+        let size = frameSize
+        let rect = CGRect(x: point.x * size.width - 2, y: point.y * size.height - 2, width: 4, height: 4)
+        let converted = videoOutput.metadataOutputRectConverted(fromOutputRect: rect)
+        return CGPoint(x: converted.midX, y: converted.midY)
+    }
+
     // MARK: - Sound
 
     struct ChannelLevel {
@@ -290,6 +301,10 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         if output === videoOutput {
+            if let format = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                let dims = CMVideoFormatDescriptionGetDimensions(format)
+                frameSize = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+            }
             writer?.appendVideo(sampleBuffer)
             frameHandler?(sampleBuffer)
         } else {

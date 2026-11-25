@@ -520,6 +520,7 @@ struct SettingsView: View {
                     Toggle("Smaller files (HEVC)", isOn: $model.settings.hevc)
                     Toggle("Live view on Mac", isOn: $model.settings.sendPreview)
                     Toggle("Show level", isOn: $model.settings.showLevel)
+                    Toggle("Focus on things I hold up", isOn: $model.settings.focusOnShownObjects)
                 }
 
                 Section {
