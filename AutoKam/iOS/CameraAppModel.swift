@@ -68,6 +68,7 @@ struct CaptureSettings: Codable, Equatable {
     var warnNoExternalMic = true
     var showLevel = true
     var focusOnShownObjects = true
+    var gestureDebug = false
 
     init() {}
 
@@ -97,6 +98,7 @@ struct CaptureSettings: Codable, Equatable {
         warnNoExternalMic = try c.decodeIfPresent(Bool.self, forKey: .warnNoExternalMic) ?? d.warnNoExternalMic
         showLevel = try c.decodeIfPresent(Bool.self, forKey: .showLevel) ?? d.showLevel
         focusOnShownObjects = try c.decodeIfPresent(Bool.self, forKey: .focusOnShownObjects) ?? d.focusOnShownObjects
+        gestureDebug = try c.decodeIfPresent(Bool.self, forKey: .gestureDebug) ?? d.gestureDebug
     }
 }
 
@@ -221,6 +223,8 @@ final class CameraAppModel: ObservableObject {
         didSet { settingsChanged(from: oldValue) }
     }
     @Published private(set) var gestureProgress: GestureProgress?
+    /// What the phone sees per finger (Settings → Gestures → Show what it sees).
+    @Published private(set) var gestureDebugText: String?
     @Published private(set) var toast: Toast?
     @Published private(set) var flashColor: Color?
     @Published private(set) var cameraReady = false
@@ -640,6 +644,11 @@ final class CameraAppModel: ObservableObject {
         gestures.tuning = settings.gestureSpeed.tuning
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
+        gestures.debug = settings.gestureDebug
+        gestures.onDebug = { [weak self] text in
+            guard let self, self.settings.gestureDebug, self.gestureDebugText != text else { return }
+            self.gestureDebugText = text
+        }
         gestures.onShowing = { [weak self] point in self?.showingChanged(point) }
         camera.onFaces = { [weak self] objects in self?.updateFaces(objects) }
         camera.onFocusAdjusting = { [weak self] adjusting in
@@ -744,6 +753,8 @@ final class CameraAppModel: ObservableObject {
         gestures.tuning = settings.gestureSpeed.tuning
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
+        gestures.debug = settings.gestureDebug
+        if !settings.gestureDebug { gestureDebugText = nil }
         gestures.enabled = settings.gesturesEnabled
         if !settings.gesturesEnabled { gestureProgress = nil }
         previewEnabled = settings.sendPreview

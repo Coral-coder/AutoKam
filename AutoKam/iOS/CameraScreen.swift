@@ -116,6 +116,14 @@ struct CameraScreen: View {
 
     private var noticeView: some View {
         VStack(spacing: 6) {
+            if let debug = model.gestureDebugText {
+                Text(debug)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                    .foregroundStyle(.white)
+            }
             HStack(spacing: 6) {
                 MicChip(meter: model.meter)
                 if let mode = model.activeMode {
@@ -500,6 +508,7 @@ struct SettingsView: View {
                         }
                     }
                     Toggle("Count-in beeps", isOn: $model.settings.countInBeeps)
+                    Toggle("Show what it sees", isOn: $model.settings.gestureDebug)
                     Toggle("Cut the gesture off kept takes", isOn: $model.settings.trimGesture)
                 } header: {
                     Text("Gestures")
