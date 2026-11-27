@@ -6,22 +6,24 @@ import CoreVideo
 import ImageIO
 
 /// How picky the recognizer is. Medium is the default.
+///
+/// Fingers are judged by how bent their joints are, which doesn't change when the hand is
+/// tilted, near or far, so a close-enough gesture still counts.
 struct GestureTuning {
     var hold: Double           // seconds the pose must be held
     var jointConfidence: Float // how sure Vision must be about each joint
-    var handConfidence: Float
-    var fingerUp: CGFloat      // fingertip above its knuckle, in hand lengths
-    var fingerLength: CGFloat  // straight finger: tip-to-knuckle, in hand lengths
-    var foldedLength: CGFloat  // folded finger: tip within this of its knuckle
-    var stillness: CGFloat     // how far the hand may drift during the hold
+    var straight: CGFloat      // a joint this open (degrees) counts as straight
+    var bent: CGFloat          // a joint this closed (degrees) counts as folded
+    var maxTilt: CGFloat       // how far from vertical the hand may lean (degrees)
+    var stillness: CGFloat     // how far the hand may drift during the hold (hand lengths)
     var minFrames: Int
 
-    static let high = GestureTuning(hold: 0.3, jointConfidence: 0.25, handConfidence: 0.25, fingerUp: 0.3,
-                                    fingerLength: 0.5, foldedLength: 0.85, stillness: 0.8, minFrames: 3)
-    static let medium = GestureTuning(hold: 0.4, jointConfidence: 0.3, handConfidence: 0.3, fingerUp: 0.4,
-                                      fingerLength: 0.55, foldedLength: 0.78, stillness: 0.65, minFrames: 4)
-    static let low = GestureTuning(hold: 0.6, jointConfidence: 0.45, handConfidence: 0.45, fingerUp: 0.55,
-                                   fingerLength: 0.65, foldedLength: 0.68, stillness: 0.45, minFrames: 6)
+    static let high = GestureTuning(hold: 0.3, jointConfidence: 0.2, straight: 140, bent: 130,
+                                    maxTilt: 75, stillness: 0.9, minFrames: 3)
+    static let medium = GestureTuning(hold: 0.4, jointConfidence: 0.25, straight: 148, bent: 122,
+                                      maxTilt: 65, stillness: 0.7, minFrames: 4)
+    static let low = GestureTuning(hold: 0.6, jointConfidence: 0.35, straight: 158, bent: 110,
+                                   maxTilt: 50, stillness: 0.5, minFrames: 6)
 }
 
 struct GestureProgress: Equatable {
@@ -30,12 +32,15 @@ struct GestureProgress: Equatable {
 }
 
 /// Looks for ✋ / ✊ / 👍 / ✌️ held for `holdDuration` seconds, checking about 20 times a second
-/// on the phone itself. Frames must be upright. Callbacks arrive on the main queue.
+/// on the phone itself. Callbacks arrive on the main queue.
 final class GestureDetector {
     var enabled = true
     /// Thresholds and hold time (Settings → Gestures → Sensitivity).
     var tuning = GestureTuning.medium
     var onProgress: ((GestureProgress?) -> Void)?
+    /// What the phone sees per finger, for the on-screen gesture debug readout. Main queue.
+    var onDebug: ((String) -> Void)?
+    var debug = false
     /// The gesture and when it first appeared (used to trim it off a kept take).
     var onGesture: ((HandGesture, Date) -> Void)?
 
@@ -100,17 +105,23 @@ final class GestureDetector {
             var found: Sighting?
             var shown: (point: CGPoint, scale: CGFloat)?
             var handSeen = false
+            var debugLines: [String] = []
             let aspect = height > 0 ? width / height : 1
             if (try? handler.perform([request])) != nil, let hands = request.results {
-                for hand in hands where hand.confidence >= 0.3 {
+                for hand in hands where hand.confidence >= 0.2 {
                     handSeen = true
                     let t = tuning
+                    if debug { debugLines.append(Self.describe(hand, aspect: aspect, t: t)) }
                     if let sighting = Self.classify(hand, aspect: aspect, t: t) {
                         if !disabled.contains(sighting.gesture) && found == nil { found = sighting }
                     } else if shown == nil, let object = Self.showingObject(hand, aspect: aspect) {
                         shown = object
                     }
                 }
+            }
+            if debug {
+                let text = debugLines.isEmpty ? "no hand" : debugLines.joined(separator: "\n")
+                DispatchQueue.main.async { self.onDebug?(text) }
             }
             let now = CACurrentMediaTime()
             updateShowing(shown, handSeen: handSeen, aspect: aspect, now: now)
@@ -138,8 +149,8 @@ final class GestureDetector {
             return
         }
         guard let sighting else {
-            // One dropped frame is forgiven; two and the hold starts over.
-            if current != nil, misses < 1 {
+            // A couple of dropped frames are forgiven; more and the hold starts over.
+            if current != nil, misses < 2 {
                 misses += 1
                 return
             }
@@ -219,74 +230,139 @@ final class GestureDetector {
     }
 
     // MARK: - Classification
-    //
-    // Deliberately strict: a gesture only counts when every joint is clearly visible, the hand
-    // is upright and the shape is unmistakable. Ordinary hands — resting, talking, holding
-    // something — must never match.
 
-    /// Hand joints in square coordinates (x scaled by the aspect ratio), y pointing up.
+    private enum Finger: Equatable { case straight, folded, between, unseen }
+
+    /// One hand's joints in square coordinates (x scaled by the aspect ratio), y pointing up.
     private struct Hand {
-        var wrist, thumbTip, thumbIP, thumbMP: CGPoint
-        var indexTip, indexPIP, indexMCP: CGPoint
-        var middleTip, middlePIP, middleMCP: CGPoint
-        var ringTip, ringPIP, ringMCP: CGPoint
-        var littleTip, littlePIP, littleMCP: CGPoint
-
-        /// `tipConfidence` applies to fingertips, `minConfidence` to everything else.
-        init?(_ points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint], aspect: CGFloat,
-              minConfidence: Float, tipConfidence: Float) {
-            func p(_ joint: VNHumanHandPoseObservation.JointName, _ min: Float) -> CGPoint? {
-                guard let point = points[joint], point.confidence >= min else { return nil }
-                return CGPoint(x: point.location.x * aspect, y: point.location.y)
-            }
-            guard let wrist = p(.wrist, minConfidence), let thumbTip = p(.thumbTip, tipConfidence),
-                  let thumbIP = p(.thumbIP, minConfidence), let thumbMP = p(.thumbMP, minConfidence),
-                  let indexTip = p(.indexTip, tipConfidence), let indexPIP = p(.indexPIP, minConfidence), let indexMCP = p(.indexMCP, minConfidence),
-                  let middleTip = p(.middleTip, tipConfidence), let middlePIP = p(.middlePIP, minConfidence), let middleMCP = p(.middleMCP, minConfidence),
-                  let ringTip = p(.ringTip, tipConfidence), let ringPIP = p(.ringPIP, minConfidence), let ringMCP = p(.ringMCP, minConfidence),
-                  let littleTip = p(.littleTip, tipConfidence), let littlePIP = p(.littlePIP, minConfidence), let littleMCP = p(.littleMCP, minConfidence)
-            else { return nil }
-            self.wrist = wrist; self.thumbTip = thumbTip; self.thumbIP = thumbIP; self.thumbMP = thumbMP
-            self.indexTip = indexTip; self.indexPIP = indexPIP; self.indexMCP = indexMCP
-            self.middleTip = middleTip; self.middlePIP = middlePIP; self.middleMCP = middleMCP
-            self.ringTip = ringTip; self.ringPIP = ringPIP; self.ringMCP = ringMCP
-            self.littleTip = littleTip; self.littlePIP = littlePIP; self.littleMCP = littleMCP
-        }
+        let points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint]
+        let aspect: CGFloat
+        let t: GestureTuning
 
         static func d(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
-        var scale: CGFloat { Self.d(wrist, middleMCP) }
 
-        /// Straight and pointing up.
-        func straightUp(_ tip: CGPoint, _ pip: CGPoint, _ mcp: CGPoint, _ t: GestureTuning) -> Bool {
-            Self.d(wrist, tip) > Self.d(wrist, pip) * 1.08
-                && Self.d(tip, mcp) > scale * t.fingerLength
-                && tip.y - mcp.y > scale * t.fingerUp
+        /// A joint's position if Vision is reasonably sure of it.
+        func p(_ joint: VNHumanHandPoseObservation.JointName, _ minimum: Float? = nil) -> CGPoint? {
+            guard let point = points[joint], point.confidence >= (minimum ?? t.jointConfidence) else { return nil }
+            return CGPoint(x: point.location.x * aspect, y: point.location.y)
         }
-        /// Folded down into the palm.
-        func folded(_ tip: CGPoint, _ pip: CGPoint, _ mcp: CGPoint, _ t: GestureTuning) -> Bool {
-            Self.d(wrist, tip) < Self.d(wrist, pip) * 1.05 && Self.d(tip, mcp) < scale * t.foldedLength
-        }
-        func allFolded(_ t: GestureTuning) -> Bool {
-            folded(indexTip, indexPIP, indexMCP, t) && folded(middleTip, middlePIP, middleMCP, t)
-                && folded(ringTip, ringPIP, ringMCP, t) && folded(littleTip, littlePIP, littleMCP, t)
-        }
-        /// Hand held up: knuckles above the wrist.
-        var upright: Bool { middleMCP.y - wrist.y > scale * 0.5 }
 
-        func isThumbsUp(_ t: GestureTuning) -> Bool {
-            guard allFolded(t) else { return false }
-            let dy = thumbTip.y - thumbMP.y
-            let dx = abs(thumbTip.x - thumbMP.x)
-            let others = [indexTip, middleTip, ringTip, littleTip, indexPIP, middlePIP, indexMCP, middleMCP, wrist]
-            return Self.d(thumbTip, thumbMP) > scale * 0.35
-                && dy > scale * 0.35 && dy > dx * 1.3
-                && thumbTip.y > thumbMP.y
-                && others.allSatisfy { thumbTip.y > $0.y + scale * 0.1 }
+        /// Angle at `b` between `a` and `c`, in degrees: 180 is a straight line.
+        static func angle(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGFloat {
+            let v1 = CGPoint(x: a.x - b.x, y: a.y - b.y), v2 = CGPoint(x: c.x - b.x, y: c.y - b.y)
+            let len = hypot(v1.x, v1.y) * hypot(v2.x, v2.y)
+            guard len > 0 else { return 180 }
+            let cosine = max(-1, min(1, (v1.x * v2.x + v1.y * v2.y) / len))
+            return acos(cosine) * 180 / .pi
+        }
+
+        var wrist: CGPoint? { p(.wrist) }
+        var middleMCP: CGPoint? { p(.middleMCP) }
+        var scale: CGFloat? {
+            guard let wrist, let middleMCP else { return nil }
+            return Self.d(wrist, middleMCP)
+        }
+
+        /// How far the hand leans from vertical (wrist to middle knuckle), in degrees.
+        var tilt: CGFloat? {
+            guard let wrist, let middleMCP else { return nil }
+            let dx = middleMCP.x - wrist.x, dy = middleMCP.y - wrist.y
+            return abs(atan2(dx, dy) * 180 / .pi)
+        }
+
+        func finger(_ mcp: VNHumanHandPoseObservation.JointName, _ pip: VNHumanHandPoseObservation.JointName,
+                    _ dip: VNHumanHandPoseObservation.JointName, _ tip: VNHumanHandPoseObservation.JointName) -> Finger {
+            guard let wrist, let m = p(mcp), let pi = p(pip) else { return .unseen }
+            // In a fist the fingertips are hidden; their rough positions are still useful.
+            guard let di = p(dip, 0.05), let ti = p(tip, 0.05) else { return .unseen }
+            let atPIP = Self.angle(m, pi, di)
+            let atDIP = Self.angle(pi, di, ti)
+            let tipOut = Self.d(wrist, ti) > Self.d(wrist, pi)
+            if atPIP >= t.straight && atDIP >= t.straight - 25 && tipOut { return .straight }
+            if atPIP <= t.bent || !tipOut { return .folded }
+            return .between
+        }
+
+        var index: Finger { finger(.indexMCP, .indexPIP, .indexDIP, .indexTip) }
+        var middle: Finger { finger(.middleMCP, .middlePIP, .middleDIP, .middleTip) }
+        var ring: Finger { finger(.ringMCP, .ringPIP, .ringDIP, .ringTip) }
+        var little: Finger { finger(.littleMCP, .littlePIP, .littleDIP, .littleTip) }
+
+        /// Thumb straight and away from the hand.
+        var thumbOut: Bool {
+            guard let cmc = p(.thumbCMC, 0.1), let mp = p(.thumbMP), let ip = p(.thumbIP), let tip = p(.thumbTip),
+                  let indexMCP = p(.indexMCP), let scale else { return false }
+            return Self.angle(mp, ip, tip) >= t.straight - 15
+                && Self.angle(cmc, mp, ip) >= t.straight - 25
+                && Self.d(tip, indexMCP) > scale * 0.45
+        }
+
+        /// Thumb pointing up (within 40° of vertical) and above the rest of the hand.
+        var thumbPointsUp: Bool {
+            guard let mp = p(.thumbMP), let tip = p(.thumbTip), let scale else { return false }
+            let dx = tip.x - mp.x, dy = tip.y - mp.y
+            guard dy > scale * 0.3, abs(atan2(dx, dy) * 180 / .pi) < 40 else { return false }
+            let others: [VNHumanHandPoseObservation.JointName] = [.indexTip, .middleTip, .ringTip, .littleTip, .indexPIP, .middlePIP, .wrist]
+            return others.compactMap { p($0, 0.05) }.allSatisfy { tip.y > $0.y }
         }
     }
 
-    /// A raised hand that's partly hidden — something held up in front of the palm. Returns the
-    /// middle of the hand (where the object is) in square coordinates, and the hand's size.
+    private static func classify(_ observation: VNHumanHandPoseObservation, aspect: CGFloat, t: GestureTuning) -> Sighting? {
+        guard let points = try? observation.recognizedPoints(.all) else { return nil }
+        let h = Hand(points: points, aspect: aspect, t: t)
+        guard let wrist = h.wrist, let scale = h.scale, scale > 0.02, let tilt = h.tilt else { return nil }
+        let fingers = [h.index, h.middle, h.ring, h.little]
+        let folded = fingers.allSatisfy { $0 == .folded }
+
+        // 👍 fist with the thumb straight and pointing up (the hand itself may be sideways).
+        if folded && h.thumbOut && h.thumbPointsUp {
+            return Sighting(gesture: .thumbsUp, wrist: wrist, scale: scale)
+        }
+        // The other gestures are shown with the hand held up, leaning no more than maxTilt.
+        guard tilt <= t.maxTilt else { return nil }
+
+        // ✋ all four fingers straight and the thumb out.
+        if fingers.allSatisfy({ $0 == .straight }) && h.thumbOut {
+            return Sighting(gesture: .openPalm, wrist: wrist, scale: scale)
+        }
+        // ✌️ index and middle straight and apart, ring and little folded.
+        if h.index == .straight && h.middle == .straight && h.ring == .folded && h.little == .folded,
+           let a = h.p(.indexTip), let b = h.p(.middleTip), Hand.d(a, b) > scale * 0.25 {
+            return Sighting(gesture: .peace, wrist: wrist, scale: scale)
+        }
+        // ✊ all four fingers folded tight (tips near their knuckles — a hand wrapped around
+        // something you're holding up is wider than that) and the thumb not sticking up.
+        let pairs: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] =
+            [(.indexTip, .indexMCP), (.middleTip, .middleMCP), (.ringTip, .ringMCP), (.littleTip, .littleMCP)]
+        let tight = pairs.filter { tip, mcp in
+            guard let a = h.p(tip, 0.05), let b = h.p(mcp, 0.05) else { return false }
+            return Hand.d(a, b) < scale * 0.75
+        }.count >= 3
+        if folded && tight && !h.thumbPointsUp {
+            return Sighting(gesture: .fist, wrist: wrist, scale: scale)
+        }
+        return nil
+    }
+
+    /// A one-line readout of what the phone sees, for Settings → Gestures → Show what it sees.
+    private static func describe(_ observation: VNHumanHandPoseObservation, aspect: CGFloat, t: GestureTuning) -> String {
+        guard let points = try? observation.recognizedPoints(.all) else { return "hand: no joints" }
+        let h = Hand(points: points, aspect: aspect, t: t)
+        func mark(_ f: Finger) -> String {
+            switch f {
+            case .straight: return "up"
+            case .folded: return "fold"
+            case .between: return "half"
+            case .unseen: return "?"
+            }
+        }
+        let tilt = h.tilt.map { String(format: "%.0f°", $0) } ?? "?"
+        let result = classify(observation, aspect: aspect, t: t).map { $0.gesture.emoji } ?? "—"
+        return "I \(mark(h.index))  M \(mark(h.middle))  R \(mark(h.ring))  L \(mark(h.little))  "
+            + "thumb \(h.thumbOut ? (h.thumbPointsUp ? "up" : "out") : "in")  tilt \(tilt)  "
+            + String(format: "conf %.2f", observation.confidence) + "  → \(result)"
+    }
+
     private static func showingObject(_ observation: VNHumanHandPoseObservation, aspect: CGFloat) -> (point: CGPoint, scale: CGFloat)? {
         guard let points = try? observation.recognizedPoints(.all), points.count >= 15 else { return nil }
         let all = Array(points.values)
@@ -307,47 +383,5 @@ final class GestureDetector {
         return (center, scale)
     }
 
-    private static func classify(_ observation: VNHumanHandPoseObservation, aspect: CGFloat, t: GestureTuning) -> Sighting? {
-        guard observation.confidence >= t.handConfidence, let points = try? observation.recognizedPoints(.all) else { return nil }
-
-        if let h = Hand(points, aspect: aspect, minConfidence: t.jointConfidence, tipConfidence: t.jointConfidence), h.scale > 0.025 {
-            let s = h.scale
-            if h.isThumbsUp(t) {
-                return Sighting(gesture: .thumbsUp, wrist: h.wrist, scale: s)
-            }
-            let index = h.straightUp(h.indexTip, h.indexPIP, h.indexMCP, t)
-            let middle = h.straightUp(h.middleTip, h.middlePIP, h.middleMCP, t)
-            let ring = h.straightUp(h.ringTip, h.ringPIP, h.ringMCP, t)
-            let little = h.straightUp(h.littleTip, h.littlePIP, h.littleMCP, t)
-
-            // ✋ every finger up, a little spread, thumb out, hand held up.
-            if index && middle && ring && little && h.upright
-                && Hand.d(h.thumbTip, h.indexMCP) > s * 0.45
-                && Hand.d(h.indexTip, h.littleTip) > s * 0.4
-                && h.middleTip.y - h.wrist.y > s * 1.3 {
-                return Sighting(gesture: .openPalm, wrist: h.wrist, scale: s)
-            }
-            // ✌️ index and middle up and apart, ring and little folded.
-            if index && middle && h.upright
-                && h.folded(h.ringTip, h.ringPIP, h.ringMCP, t) && h.folded(h.littleTip, h.littlePIP, h.littleMCP, t)
-                && Hand.d(h.indexTip, h.middleTip) > s * 0.3
-                && h.thumbTip.y < h.indexTip.y {
-                return Sighting(gesture: .peace, wrist: h.wrist, scale: s)
-            }
-        }
-
-        // ✊ Fingertips are hidden in a fist, so they may be less certain — the knuckles and
-        // wrist must be clear, the fist held up, and the thumb not sticking up.
-        if let h = Hand(points, aspect: aspect, minConfidence: t.jointConfidence, tipConfidence: 0.1), h.scale > 0.025 {
-            let s = h.scale
-            let tipsLow = [(h.indexTip, h.indexMCP), (h.middleTip, h.middleMCP),
-                           (h.ringTip, h.ringMCP), (h.littleTip, h.littleMCP)].allSatisfy { $0.0.y < $0.1.y + s * 0.25 }
-            let thumbDown = h.thumbTip.y < h.indexMCP.y + s * 0.3
-            if h.allFolded(t) && tipsLow && thumbDown && h.upright && !h.isThumbsUp(t) {
-                return Sighting(gesture: .fist, wrist: h.wrist, scale: s)
-            }
-        }
-        return nil
-    }
 }
 #endif
