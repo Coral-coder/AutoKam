@@ -490,6 +490,30 @@ jobs:
           echo "PROJECT=$project" >> "$GITHUB_ENV"
           echo "SCHEME=${project%.xcodeproj}" >> "$GITHUB_ENV"
 
+      # Same as the iOS job: reuse the one development certificate from DEV_CERT_P12, so this
+      # job doesn't ask Apple for a new certificate every run (accounts have a small limit).
+      - name: Signing certificate
+        if: env.SKIP != 'true'
+        env:
+          DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
+          DEV_CERT_PASSWORD: ${{ secrets.DEV_CERT_PASSWORD }}
+        run: |
+          if [ -z "$DEV_CERT_P12" ]; then
+            echo "::warning::No DEV_CERT_P12 secret: Xcode will try to create a new development certificate"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -hex 16)
+          printf '%s' "$DEV_CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$DEV_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/signing.p12"
+
       - name: Archive (macOS)
         if: env.SKIP != 'true'
         run: |
@@ -544,4 +568,6 @@ jobs:
 
       - name: Remove keys
         if: always()
-        run: rm -rf "$RUNNER_TEMP/asc"
+        run: |
+          rm -rf "$RUNNER_TEMP/asc" "$RUNNER_TEMP/signing.p12"
+          if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true; fi
