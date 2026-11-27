@@ -923,7 +923,11 @@ final class CameraAppModel: ObservableObject {
             defer { DispatchQueue.main.async { self?.uploading.remove(id) } }
             guard let handle = try? FileHandle(forReadingFrom: url) else { return }
             defer { try? handle.close() }
-            let inFlight = DispatchSemaphore(value: 4)
+            // Start at 0 and add the four slots: libdispatch traps if a semaphore is freed while
+            // its count is below the value it was created with, which happens with value: 4
+            // once the last piece's completion releases it.
+            let inFlight = DispatchSemaphore(value: 0)
+            for _ in 0 ..< 4 { inFlight.signal() }
             let failedLock = NSLock()
             var failed = false
             var position = offset
