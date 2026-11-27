@@ -69,6 +69,7 @@ struct CaptureSettings: Codable, Equatable {
     var showLevel = true
     var focusOnShownObjects = true
     var gestureDebug = false
+    var bothHands = true
 
     init() {}
 
@@ -99,6 +100,7 @@ struct CaptureSettings: Codable, Equatable {
         showLevel = try c.decodeIfPresent(Bool.self, forKey: .showLevel) ?? d.showLevel
         focusOnShownObjects = try c.decodeIfPresent(Bool.self, forKey: .focusOnShownObjects) ?? d.focusOnShownObjects
         gestureDebug = try c.decodeIfPresent(Bool.self, forKey: .gestureDebug) ?? d.gestureDebug
+        bothHands = try c.decodeIfPresent(Bool.self, forKey: .bothHands) ?? d.bothHands
     }
 }
 
@@ -645,6 +647,7 @@ final class CameraAppModel: ObservableObject {
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
         gestures.debug = settings.gestureDebug
+        gestures.requireBothHands = settings.bothHands
         gestures.onDebug = { [weak self] text in
             guard let self, self.settings.gestureDebug, self.gestureDebugText != text else { return }
             self.gestureDebugText = text
@@ -754,6 +757,7 @@ final class CameraAppModel: ObservableObject {
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
         gestures.debug = settings.gestureDebug
+        gestures.requireBothHands = settings.bothHands
         if !settings.gestureDebug { gestureDebugText = nil }
         gestures.enabled = settings.gesturesEnabled
         if !settings.gesturesEnabled { gestureProgress = nil }

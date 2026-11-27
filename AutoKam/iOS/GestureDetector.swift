@@ -65,6 +65,9 @@ final class GestureDetector {
     var disabled: Set<HandGesture> = []
     /// Notice a hand holding something up to the camera (and ignore gestures meanwhile).
     var detectShowing = true
+    /// Gestures need both hands making the same shape at once. One hand on its own (holding
+    /// something, talking) can't trigger anything.
+    var requireBothHands = true
     /// Where a shown object is, in upright frame coordinates (0–1, origin top-left), or nil
     /// once the hand has gone. Main queue.
     var onShowing: ((CGPoint?) -> Void)?
@@ -108,16 +111,18 @@ final class GestureDetector {
             var debugLines: [String] = []
             let aspect = height > 0 ? width / height : 1
             if (try? handler.perform([request])) != nil, let hands = request.results {
+                var sightings: [Sighting] = []
                 for hand in hands where hand.confidence >= 0.2 {
                     handSeen = true
                     let t = tuning
                     if debug { debugLines.append(Self.describe(hand, aspect: aspect, t: t)) }
                     if let sighting = Self.classify(hand, aspect: aspect, t: t) {
-                        if !disabled.contains(sighting.gesture) && found == nil { found = sighting }
+                        if !disabled.contains(sighting.gesture) { sightings.append(sighting) }
                     } else if shown == nil, let object = Self.showingObject(hand, aspect: aspect) {
                         shown = object
                     }
                 }
+                found = requireBothHands ? Self.bothHands(sightings) : sightings.first
             }
             if debug {
                 let text = debugLines.isEmpty ? "no hand" : debugLines.joined(separator: "\n")
@@ -342,6 +347,17 @@ final class GestureDetector {
             return Sighting(gesture: .fist, wrist: wrist, scale: scale)
         }
         return nil
+    }
+
+    /// Two separate hands showing the same gesture. Reported at the point between them.
+    private static func bothHands(_ sightings: [Sighting]) -> Sighting? {
+        guard sightings.count >= 2 else { return nil }
+        let a = sightings[0], b = sightings[1]
+        let scale = max(a.scale, b.scale)
+        // Really two hands, not one hand seen twice.
+        guard a.gesture == b.gesture, Hand.d(a.wrist, b.wrist) > scale * 1.2 else { return nil }
+        let middle = CGPoint(x: (a.wrist.x + b.wrist.x) / 2, y: (a.wrist.y + b.wrist.y) / 2)
+        return Sighting(gesture: a.gesture, wrist: middle, scale: scale)
     }
 
     /// A one-line readout of what the phone sees, for Settings → Gestures → Show what it sees.

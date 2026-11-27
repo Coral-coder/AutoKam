@@ -166,8 +166,8 @@ struct CameraScreen: View {
                         .trim(from: 0, to: CGFloat(seen.progress))
                         .stroke(Color.green, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                    Text(seen.gesture.emoji)
-                        .font(.system(size: 64))
+                    Text(model.settings.bothHands ? seen.gesture.emoji + seen.gesture.emoji : seen.gesture.emoji)
+                        .font(.system(size: model.settings.bothHands ? 44 : 64))
                 }
                 .frame(width: 130, height: 130)
                 .background(.ultraThinMaterial, in: Circle())
@@ -326,7 +326,8 @@ struct CameraScreen: View {
                                     .stroke(Color.green, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                                     .rotationEffect(.degrees(-90))
                                     .frame(width: 30, height: 30)
-                                Text(gesture.emoji).font(.system(size: active ? 20 : 16))
+                                Text(model.settings.bothHands ? gesture.emoji + gesture.emoji : gesture.emoji)
+                                    .font(.system(size: active ? 16 : 13))
                             }
                             Text(label(for: gesture))
                                 .font(.caption2.weight(.semibold))
@@ -489,6 +490,8 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("Hand gestures", isOn: $model.settings.gesturesEnabled)
+                    Toggle("Use both hands (recommended)", isOn: $model.settings.bothHands)
+                        .disabled(!model.settings.gesturesEnabled)
                     ForEach(HandGesture.allCases, id: \.self) { gesture in
                         Toggle("\(gesture.emoji)  \(gesture.meaning)", isOn: Binding(
                             get: { model.isGestureOn(gesture) },
@@ -513,7 +516,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Gestures")
                 } footer: {
-                    Text("Sensitivity: High reacts fastest and accepts looser shapes; Low needs a clear pose held longer. Medium is the default. The hand has to stay still while it's read, so talking with your hands doesn't count. Tap the gesture bar on the camera screen to pause gestures.\n✋ Open hand: start — or, while recording, goofed: redo this segment.\n✊ Fist: cut — keep this take and count in the next segment.\n👍 Thumbs up: keep this take and stop.\n✌️ Peace sign: stop without keeping.\nRetakes and cuts always count in at least 2 seconds.")
+                    Text("Both hands: every gesture needs both hands making the same shape at once — ✋✋ start / redo, ✊✊ cut, 👍👍 keep, ✌️✌️ stop. One hand on its own (holding something, talking) never triggers anything.\nSensitivity: High reacts fastest and accepts looser shapes; Low needs a clear pose held longer. Medium is the default. The hand has to stay still while it's read, so talking with your hands doesn't count. Tap the gesture bar on the camera screen to pause gestures.\n✋ Open hand: start — or, while recording, goofed: redo this segment.\n✊ Fist: cut — keep this take and count in the next segment.\n👍 Thumbs up: keep this take and stop.\n✌️ Peace sign: stop without keeping.\nRetakes and cuts always count in at least 2 seconds.")
                 }
 
                 Section {

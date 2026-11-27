@@ -29,13 +29,13 @@ enum Walkthrough {
             "The meter on the right shows left and right levels as you talk.",
             "A small yellow note appears if the external mic isn't connected, or if a take starts and no sound is coming in. Tap it to hide it for a couple of minutes.",
         ]),
-        WalkthroughPage(symbol: "hand.raised.fill", title: "4 · Hand gestures", lines: [
-            "✋  Open hand: start recording. While recording it means \"goofed\": that take is tossed and the same segment counts in again.",
-            "✊  Fist: cut. This take is kept, then the next segment counts in, so there's time to drop your hand.",
-            "👍  Thumbs up: keep this take and stop. (When stopped, it keeps the last take.)",
-            "✌️  Peace sign: stop without keeping.",
-            "Hold the hand up, clearly, and keep it still for about half a second. A ring fills while it's being read, then a ✓ and a sound confirm it. Moving or resting hands are ignored.",
-            "Tap the gesture bar at the top to pause gestures. Each gesture can be switched off in Settings → Gestures. If one isn't being picked up, turn on Settings → Gestures → Show what it sees: it shows, finger by finger, what the phone reads.",
+        WalkthroughPage(symbol: "hand.raised.fill", title: "4 · Hand gestures — use both hands", lines: [
+            "Every gesture takes both hands making the same shape at the same time, held still for a moment. One hand on its own — holding a product or a mirror, talking — never triggers anything.",
+            "✋✋  Both hands open: start recording. While recording it means \"goofed\": that take is tossed and the same segment counts in again.",
+            "✊✊  Two fists: cut. This take is kept, then the next segment counts in, so there's time to drop your hands.",
+            "👍👍  Two thumbs up: keep this take and stop.",
+            "✌️✌️  Two peace signs: stop without keeping.",
+            "A ring fills while it's being read, then a ✓ and a sound confirm it. Tap the gesture bar at the top to pause gestures; Settings → Gestures has the sensitivity and a one-hand mode.",
         ]),
         WalkthroughPage(symbol: "film.stack", title: "5 · Segments and takes", lines: [
             "A video is built from segments, and each segment can take a few tries.",
