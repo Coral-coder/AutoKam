@@ -116,7 +116,16 @@ struct CameraScreen: View {
 
     private var noticeView: some View {
         VStack(spacing: 6) {
-            MicChip(meter: model.meter)
+            HStack(spacing: 6) {
+                MicChip(meter: model.meter)
+                if let mode = model.activeMode {
+                    Text(mode.label)
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.black.opacity(0.5), in: Capsule())
+                        .foregroundStyle(.white)
+                }
+            }
             if let warning = model.audioWarning {
                 Button { model.dismissWarning() } label: {
                     Label(warning, systemImage: "mic.badge.xmark")
@@ -485,7 +494,7 @@ struct SettingsView: View {
                         Text("3 seconds").tag(3)
                         Text("5 seconds").tag(5)
                     }
-                    Picker("Speed", selection: $model.settings.gestureSpeed) {
+                    Picker("Sensitivity", selection: $model.settings.gestureSpeed) {
                         ForEach(GestureSpeed.allCases) { speed in
                             Text(speed.label).tag(speed)
                         }
@@ -495,7 +504,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Gestures")
                 } footer: {
-                    Text("A gesture counts only when it's clear, the hand is held up and kept still for the hold time (Normal ≈ half a second). Moving hands, talking with your hands or resting hands are ignored. Tap the gesture bar on the camera screen to pause gestures. Use Careful if anything still fires by accident.\n✋ Open hand: start — or, while recording, goofed: redo this segment.\n✊ Fist: cut — keep this take and count in the next segment.\n👍 Thumbs up: keep this take and stop.\n✌️ Peace sign: stop without keeping.\nRetakes and cuts always count in at least 2 seconds.")
+                    Text("Sensitivity: High reacts fastest and accepts looser shapes; Low needs a clear pose held longer. Medium is the default. The hand has to stay still while it's read, so talking with your hands doesn't count. Tap the gesture bar on the camera screen to pause gestures.\n✋ Open hand: start — or, while recording, goofed: redo this segment.\n✊ Fist: cut — keep this take and count in the next segment.\n👍 Thumbs up: keep this take and stop.\n✌️ Peace sign: stop without keeping.\nRetakes and cuts always count in at least 2 seconds.")
                 }
 
                 Section {
@@ -513,10 +522,23 @@ struct SettingsView: View {
                     }
                     .disabled(model.phase != .idle)
                     Picker("Resolution", selection: $model.settings.uhd) {
-                        Text("1080p HD").tag(false)
                         Text("4K").tag(true)
+                        Text("1080p HD").tag(false)
                     }
                     .disabled(model.phase != .idle)
+                    Picker("Frame rate", selection: $model.settings.fps) {
+                        Text("60 fps").tag(60)
+                        Text("30 fps").tag(30)
+                    }
+                    .disabled(model.phase != .idle)
+                    Picker("Quality", selection: $model.settings.quality) {
+                        ForEach(VideoQuality.allCases) { quality in
+                            Text(quality.label).tag(quality)
+                        }
+                    }
+                    if let mode = model.activeMode {
+                        LabeledContent("Camera is running", value: mode.label)
+                    }
                     Toggle("Smaller files (HEVC)", isOn: $model.settings.hevc)
                     Toggle("Live view on Mac", isOn: $model.settings.sendPreview)
                     Toggle("Show level", isOn: $model.settings.showLevel)

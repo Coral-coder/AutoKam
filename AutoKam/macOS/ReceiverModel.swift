@@ -209,7 +209,9 @@ final class ReceiverModel: ObservableObject {
 
     private func handle(_ message: Message, _ payload: Data, from peer: PeerConnection) {
         switch message {
-        case let .hello(name, _, _):
+        case let .hello(name, role, _):
+            // The phone opens a second connection just for take files.
+            guard role != "files" else { return }
             phoneName = name
             peer.send(.session(name: sessionName, nextTake: nextTakeNumber(for: sessionName)))
         case let .takeInfo(info):
