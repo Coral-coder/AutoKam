@@ -9,7 +9,7 @@ One app, two jobs:
 
 Bundle ID `com.lightwave.autokam` (one universal app: iOS + macOS).
 
-## Hand gestures (hold it up and still for ~½ s; Settings → Gestures)
+## Hand gestures (hold it up and still for a moment; Settings → Gestures → Sensitivity)
 
 | Gesture | Not recording | Recording |
 |---|---|---|
@@ -23,6 +23,8 @@ The phone pops up the gesture it recognised and what it did. Retakes and cuts al
 **Good Takes** with the gesture cut off the end; files are named `Seg 02 - Take 03`.
 
 ## On the phone screen
+
+- **Mode chip** — what the camera is really running (default **4K 60**, quality High; Settings → Video).
 
 - **Mic chip** — which mic is recording (green = external), mono/stereo. Stereo mics record stereo.
 - **VU meter** (right edge) — L/R levels with peak hold.

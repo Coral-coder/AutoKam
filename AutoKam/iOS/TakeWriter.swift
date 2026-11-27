@@ -7,9 +7,11 @@ import AVFoundation
 final class TakeWriter {
     struct Config {
         var hevc: Bool
-        /// Wait (briefly) for frames in this orientation before starting, so a rotation
-        /// change that is still being applied doesn't end up in the take.
-        var expectPortrait: Bool?
+        /// Clockwise degrees to show the sensor frames upright; stored in the file.
+        var rotation: CGFloat
+        var fps: Int
+        /// Average video bitrate in bits per second.
+        var bitrate: Int
     }
 
     struct Result {
@@ -30,7 +32,6 @@ final class TakeWriter {
     private var dimensions: CMVideoDimensions?
     private var startPTS = CMTime.invalid
     private var lastPTS = CMTime.invalid
-    private var skippedFrames = 0
     private var audioBuffers = 0
     private var failed = false
 
@@ -46,10 +47,6 @@ final class TakeWriter {
         let dims = CMVideoFormatDescriptionGetDimensions(format)
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         if writer == nil {
-            if let wantPortrait = config.expectPortrait, (dims.height > dims.width) != wantPortrait, skippedFrames < 15 {
-                skippedFrames += 1
-                return
-            }
             guard setUp(dimensions: dims, start: pts) else {
                 failed = true
                 return
@@ -91,7 +88,7 @@ final class TakeWriter {
         audioInput?.markAsFinished()
         var duration = 0.0
         if startPTS.isValid && lastPTS.isValid {
-            duration = CMTimeGetSeconds(CMTimeSubtract(lastPTS, startPTS)) + 1.0 / 30.0
+            duration = CMTimeGetSeconds(CMTimeSubtract(lastPTS, startPTS)) + 1.0 / Double(max(config.fps, 1))
         }
         let url = fileURL
         let buffers = audioBuffers
@@ -108,17 +105,10 @@ final class TakeWriter {
         guard let writer = try? AVAssetWriter(outputURL: fileURL, fileType: .mov) else { return false }
         writer.shouldOptimizeForNetworkUse = false
 
-        let uhd = Int(dims.width) * Int(dims.height) > 3_000_000
-        let bitrate: Int
-        if config.hevc {
-            bitrate = uhd ? 40_000_000 : 14_000_000
-        } else {
-            bitrate = uhd ? 60_000_000 : 20_000_000
-        }
         var compression: [String: Any] = [
-            AVVideoAverageBitRateKey: bitrate,
+            AVVideoAverageBitRateKey: config.bitrate,
             AVVideoMaxKeyFrameIntervalDurationKey: 1.0,
-            AVVideoExpectedSourceFrameRateKey: 30,
+            AVVideoExpectedSourceFrameRateKey: config.fps,
         ]
         if !config.hevc {
             compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel
@@ -131,6 +121,7 @@ final class TakeWriter {
         ]
         let video = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         video.expectsMediaDataInRealTime = true
+        video.transform = CGAffineTransform(rotationAngle: config.rotation * .pi / 180)
         guard writer.canAdd(video) else { return false }
         writer.add(video)
 

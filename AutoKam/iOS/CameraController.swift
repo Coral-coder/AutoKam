@@ -1,5 +1,6 @@
 #if os(iOS)
 import AVFoundation
+import ImageIO
 import CallKit
 
 /// Owns the capture session. Video frames come out upright (rotation is applied on the
@@ -7,7 +8,20 @@ import CallKit
 final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, CXCallObserverDelegate, AVCaptureMetadataOutputObjectsDelegate {
     let session = AVCaptureSession()
     /// Called on the capture queue for every video frame.
-    var frameHandler: ((CMSampleBuffer) -> Void)?
+    /// Frames come straight off the sensor (not rotated, which is too costly at 4K60);
+    /// the orientation says how to turn them upright.
+    var frameHandler: ((CMSampleBuffer, CGImagePropertyOrientation) -> Void)?
+
+    /// The mode the camera is actually running (it may not reach what was asked for).
+    struct ActiveMode: Equatable {
+        var width: Int
+        var height: Int
+        var fps: Int
+        var label: String {
+            let name = width >= 3840 ? "4K" : height >= 1080 || width >= 1920 ? "1080p" : "\(min(width, height))p"
+            return "\(name) \(fps)"
+        }
+    }
 
     private let sessionQueue = DispatchQueue(label: "autokam.session")
     private let captureQueue = DispatchQueue(label: "autokam.capture", qos: .userInitiated)
@@ -58,7 +72,7 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
 
     private(set) var currentDevice: AVCaptureDevice?
 
-    func configure(front: Bool, uhd: Bool, completion: @escaping (AVCaptureDevice?) -> Void) {
+    func configure(front: Bool, uhd: Bool, fps: Int, completion: @escaping (AVCaptureDevice?, ActiveMode?) -> Void) {
         sessionQueue.async { [self] in
             session.beginConfiguration()
             if !configured {
@@ -103,12 +117,12 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                 }
             }
 
-            if uhd && session.canSetSessionPreset(.hd4K3840x2160) {
-                session.sessionPreset = .hd4K3840x2160
-            } else if session.canSetSessionPreset(.hd1920x1080) {
-                session.sessionPreset = .hd1920x1080
-            } else {
-                session.sessionPreset = .high
+            var mode: ActiveMode?
+            if let device = currentDevice {
+                mode = selectFormat(device, uhd: uhd, fps: fps)
+            }
+            if mode == nil {
+                session.sessionPreset = session.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
             }
 
             if let connection = videoOutput.connection(with: .video) {
@@ -119,23 +133,80 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                 if connection.isVideoStabilizationSupported {
                     connection.preferredVideoStabilizationMode = .auto
                 }
-                if connection.isVideoRotationAngleSupported(90) {
-                    connection.videoRotationAngle = 90
+                // Frames stay as the sensor delivers them; recordings carry the rotation.
+                if connection.isVideoRotationAngleSupported(0) {
+                    connection.videoRotationAngle = 0
                 }
             }
             session.commitConfiguration()
             if !session.isRunning { session.startRunning() }
+            // Formats can reset the frame rate when the session commits; set it again.
+            if let device = currentDevice, let mode { applyFrameRate(device, fps: mode.fps) }
             let active = currentDevice
-            DispatchQueue.main.async { completion(active) }
+            DispatchQueue.main.async { completion(active, mode) }
         }
     }
 
+    /// Picks the camera format for 4K or 1080p at the wanted frame rate (falling back to the
+    /// best the camera can do) and returns what it's running.
+    private func selectFormat(_ device: AVCaptureDevice, uhd: Bool, fps: Int) -> ActiveMode? {
+        func dims(_ f: AVCaptureDevice.Format) -> CMVideoDimensions { CMVideoFormatDescriptionGetDimensions(f.formatDescription) }
+        func maxRate(_ f: AVCaptureDevice.Format) -> Double { f.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0 }
+        func usable(_ f: AVCaptureDevice.Format) -> Bool {
+            let sub = CMFormatDescriptionGetMediaSubType(f.formatDescription)
+            return sub == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange || sub == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        }
+        func best(width: Int32) -> AVCaptureDevice.Format? {
+            let candidates = device.formats.filter { usable($0) && dims($0).width == width && dims($0).height == width * 9 / 16 }
+            let fast = candidates.filter { maxRate($0) >= Double(fps) - 0.5 }
+            let pool = fast.isEmpty ? candidates : fast
+            // Prefer video-range 8-bit, unbinned, highest frame rate.
+            return pool.max { a, b in
+                func score(_ f: AVCaptureDevice.Format) -> Double {
+                    var s = min(maxRate(f), Double(fps)) * 10
+                    if CMFormatDescriptionGetMediaSubType(f.formatDescription) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange { s += 2 }
+                    if !f.isVideoBinned { s += 1 }
+                    return s
+                }
+                return score(a) < score(b)
+            }
+        }
+        guard let format = (uhd ? best(width: 3840) : nil) ?? best(width: 1920) else { return nil }
+        guard (try? device.lockForConfiguration()) != nil else { return nil }
+        device.activeFormat = format // also switches the session to input-priority
+        device.unlockForConfiguration()
+        let subtype = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+        videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: subtype]
+        let rate = Int(min(maxRate(format), Double(fps)).rounded())
+        applyFrameRate(device, fps: rate)
+        let d = dims(format)
+        return ActiveMode(width: Int(d.width), height: Int(d.height), fps: rate)
+    }
+
+    private func applyFrameRate(_ device: AVCaptureDevice, fps: Int) {
+        guard fps > 0, (try? device.lockForConfiguration()) != nil else { return }
+        let duration = CMTime(value: 1, timescale: CMTimeScale(fps))
+        if device.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= Double(fps) - 0.5 && $0.minFrameRate <= Double(fps) + 0.5 }) {
+            device.activeVideoMinFrameDuration = duration
+            device.activeVideoMaxFrameDuration = duration
+        }
+        device.unlockForConfiguration()
+    }
+
+    /// Clockwise degrees that turn sensor frames upright (0, 90, 180 or 270). Recordings and
+    /// gesture detection use it; it's only changed between takes.
+    private(set) var rotation: CGFloat = 90
+
     func setRotation(_ angle: CGFloat) {
-        sessionQueue.async { [self] in
-            guard let connection = videoOutput.connection(with: .video),
-                  connection.isVideoRotationAngleSupported(angle),
-                  connection.videoRotationAngle != angle else { return }
-            connection.videoRotationAngle = angle
+        rotation = angle
+    }
+
+    static func orientation(for angle: CGFloat) -> CGImagePropertyOrientation {
+        switch Int(angle) {
+        case 90: return .right
+        case 180: return .down
+        case 270: return .left
+        default: return .up
         }
     }
 
@@ -180,7 +251,16 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     private var frameSize = CGSize(width: 1080, height: 1920)
 
     /// A point in the upright frame (0–1, origin top-left) as a focus point of interest.
-    func devicePoint(forFramePoint point: CGPoint) -> CGPoint {
+    func devicePoint(forFramePoint upright: CGPoint) -> CGPoint {
+        // Undo the rotation to get back to the sensor frame.
+        let u = upright.x, v = upright.y
+        let point: CGPoint
+        switch Int(rotation) {
+        case 90: point = CGPoint(x: v, y: 1 - u)
+        case 180: point = CGPoint(x: 1 - u, y: 1 - v)
+        case 270: point = CGPoint(x: 1 - v, y: u)
+        default: point = CGPoint(x: u, y: v)
+        }
         let size = frameSize
         let rect = CGRect(x: point.x * size.width - 2, y: point.y * size.height - 2, width: 4, height: 4)
         let converted = videoOutput.metadataOutputRectConverted(fromOutputRect: rect)
@@ -306,7 +386,7 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                 frameSize = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
             }
             writer?.appendVideo(sampleBuffer)
-            frameHandler?(sampleBuffer)
+            frameHandler?(sampleBuffer, Self.orientation(for: rotation))
         } else {
             writer?.appendAudio(sampleBuffer)
         }

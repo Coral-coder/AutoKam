@@ -2,6 +2,7 @@
 import SwiftUI
 import AVFoundation
 import UIKit
+import ImageIO
 import AudioToolbox
 
 enum GestureSpeed: String, Codable, CaseIterable, Identifiable {
@@ -9,25 +10,52 @@ enum GestureSpeed: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .quick: return "Quick"
-        case .normal: return "Normal"
-        case .careful: return "Careful"
+        case .quick: return "High"
+        case .normal: return "Medium"
+        case .careful: return "Low"
         }
     }
-    /// Seconds a gesture has to be held.
-    var hold: Double {
+    /// How loose the shapes may be and how long to hold them.
+    var tuning: GestureTuning {
         switch self {
-        case .quick: return 0.35
-        case .normal: return 0.55
-        case .careful: return 0.85
+        case .quick: return .high
+        case .normal: return .medium
+        case .careful: return .low
         }
+    }
+}
+
+enum VideoQuality: String, Codable, CaseIterable, Identifiable {
+    case standard, high, max
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .standard: return "Standard (smaller files)"
+        case .high: return "High"
+        case .max: return "Maximum"
+        }
+    }
+    /// Average video bitrate for a mode, in bits per second.
+    func bitrate(width: Int, fps: Int, hevc: Bool) -> Int {
+        let uhd = width >= 3840
+        let base: Double // HEVC at 30 fps, Mbit/s
+        switch self {
+        case .standard: base = uhd ? 28 : 10
+        case .high: base = uhd ? 40 : 16
+        case .max: base = uhd ? 65 : 25
+        }
+        let rate = fps > 30 ? 1.5 : 1.0
+        let codec = hevc ? 1.0 : 1.6
+        return Int(base * rate * codec * 1_000_000)
     }
 }
 
 struct CaptureSettings: Codable, Equatable {
     var gesturesEnabled = true
     var countdown = 3
-    var uhd = false
+    var uhd = true
+    var fps = 60
+    var quality = VideoQuality.high
     var hevc = true
     var trimGesture = true
     var deleteAfterTransfer = true
@@ -50,6 +78,10 @@ struct CaptureSettings: Codable, Equatable {
         gesturesEnabled = try c.decodeIfPresent(Bool.self, forKey: .gesturesEnabled) ?? d.gesturesEnabled
         countdown = try c.decodeIfPresent(Int.self, forKey: .countdown) ?? d.countdown
         uhd = try c.decodeIfPresent(Bool.self, forKey: .uhd) ?? d.uhd
+        fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
+        quality = try c.decodeIfPresent(VideoQuality.self, forKey: .quality) ?? d.quality
+        // Before the quality settings existed everything ran at 1080p 30; start at 4K 60.
+        if try c.decodeIfPresent(Int.self, forKey: .fps) == nil { uhd = true }
         hevc = try c.decodeIfPresent(Bool.self, forKey: .hevc) ?? d.hevc
         trimGesture = try c.decodeIfPresent(Bool.self, forKey: .trimGesture) ?? d.trimGesture
         deleteAfterTransfer = try c.decodeIfPresent(Bool.self, forKey: .deleteAfterTransfer) ?? d.deleteAfterTransfer
@@ -192,6 +224,8 @@ final class CameraAppModel: ObservableObject {
     @Published private(set) var toast: Toast?
     @Published private(set) var flashColor: Color?
     @Published private(set) var cameraReady = false
+    /// What the camera is really running, e.g. "4K 60".
+    @Published private(set) var activeMode: CameraController.ActiveMode?
     @Published private(set) var accessDenied = false
     /// Why the camera or its sound is paused (e.g. on a phone call); nil when all is well.
     @Published private(set) var cameraNotice: String?
@@ -603,7 +637,7 @@ final class CameraAppModel: ObservableObject {
     // MARK: - Private
 
     private func wire() {
-        gestures.holdDuration = settings.gestureSpeed.hold
+        gestures.tuning = settings.gestureSpeed.tuning
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
         gestures.onShowing = { [weak self] point in self?.showingChanged(point) }
@@ -622,8 +656,8 @@ final class CameraAppModel: ObservableObject {
         camera.onNotice = { [weak self] notice in
             self?.cameraNotice = notice
         }
-        camera.frameHandler = { [weak self] sampleBuffer in
-            self?.processFrame(sampleBuffer)
+        camera.frameHandler = { [weak self] sampleBuffer, orientation in
+            self?.processFrame(sampleBuffer, orientation: orientation)
         }
         link.onMessage = { [weak self] message, payload in
             self?.handle(message, payload)
@@ -642,9 +676,13 @@ final class CameraAppModel: ObservableObject {
     }
 
     private func configureCamera() {
-        camera.configure(front: settings.frontCamera, uhd: settings.uhd) { [weak self] device in
+        camera.configure(front: settings.frontCamera, uhd: settings.uhd, fps: settings.fps) { [weak self] device, mode in
             guard let self else { return }
             self.cameraReady = true
+            self.activeMode = mode
+            if let mode, mode.fps < self.settings.fps || (self.settings.uhd && mode.width < 3840) {
+                self.showToast("This camera can do \(mode.label) at most", color: .yellow)
+            }
             self.setUpRotation(device)
         }
     }
@@ -703,14 +741,14 @@ final class CameraAppModel: ObservableObject {
         if let data = try? JSONEncoder().encode(settings) {
             UserDefaults.standard.set(data, forKey: "settings")
         }
-        gestures.holdDuration = settings.gestureSpeed.hold
+        gestures.tuning = settings.gestureSpeed.tuning
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
         gestures.enabled = settings.gesturesEnabled
         if !settings.gesturesEnabled { gestureProgress = nil }
         previewEnabled = settings.sendPreview
         previewMirrored = settings.frontCamera
-        if cameraReady && (old.frontCamera != settings.frontCamera || old.uhd != settings.uhd) {
+        if cameraReady && (old.frontCamera != settings.frontCamera || old.uhd != settings.uhd || old.fps != settings.fps) {
             configureCamera()
         }
     }
@@ -743,7 +781,10 @@ final class CameraAppModel: ObservableObject {
 
         let angle = captureAngle
         camera.setRotation(angle)
-        let config = TakeWriter.Config(hevc: settings.hevc, expectPortrait: angle == 90 || angle == 270)
+        let fps = activeMode?.fps ?? settings.fps
+        let width = activeMode?.width ?? (settings.uhd ? 3840 : 1920)
+        let config = TakeWriter.Config(hevc: settings.hevc, rotation: angle, fps: fps,
+                                       bitrate: settings.quality.bitrate(width: width, fps: fps, hevc: settings.hevc))
         camera.startTake(fileURL: store.fileURL(for: info.id), config: config)
         recordingStart = Date()
         meter.resetSilenceTimer()
@@ -751,12 +792,12 @@ final class CameraAppModel: ObservableObject {
         flash(.red)
     }
 
-    private func processFrame(_ sampleBuffer: CMSampleBuffer) {
+    private func processFrame(_ sampleBuffer: CMSampleBuffer, orientation: CGImagePropertyOrientation) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        gestures.process(pixelBuffer)
+        gestures.process(pixelBuffer, orientation: orientation)
         if previewEnabled && link.hasReadyPeer {
             let link = self.link
-            previewEncoder.encode(pixelBuffer, mirrored: previewMirrored) { jpeg in
+            previewEncoder.encode(pixelBuffer, orientation: orientation, mirrored: previewMirrored) { jpeg in
                 link.sendPreview(jpeg)
             }
         }
@@ -868,40 +909,38 @@ final class CameraAppModel: ObservableObject {
     }
 
     /// Sends the rest of a finished take from its local file, 1 MB at a time.
-    private func upload(_ id: UUID, from offset: Int64) {
-        guard let handle = try? FileHandle(forReadingFrom: store.fileURL(for: id)) else { return }
-        uploading.insert(id)
-        sendNextChunk(id, handle, offset)
-    }
+    private let uploadQueue = DispatchQueue(label: "autokam.upload", qos: .userInitiated)
 
-    private func sendNextChunk(_ id: UUID, _ handle: FileHandle, _ offset: Int64) {
-        guard link.isConnected else {
-            uploading.remove(id)
-            try? handle.close()
-            return
-        }
-        var data = Data()
-        do {
-            try handle.seek(toOffset: UInt64(offset))
-            data = try handle.read(upToCount: 1 << 20) ?? Data()
-        } catch {
-            data = Data()
-        }
-        if data.isEmpty {
-            try? handle.close()
-            uploading.remove(id)
-            return
-        }
-        link.send(.chunk(id: id, offset: offset), payload: data) { [weak self] ok in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if ok {
-                    self.sendNextChunk(id, handle, offset + Int64(data.count))
-                } else {
-                    self.uploading.remove(id)
-                    try? handle.close()
+    /// Sends the rest of a finished take from its local file: 4 MB pieces read off the main
+    /// thread, with up to four in flight so the network never sits idle.
+    private func upload(_ id: UUID, from offset: Int64) {
+        guard !uploading.contains(id) else { return }
+        let url = store.fileURL(for: id)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        uploading.insert(id)
+        let link = self.link
+        uploadQueue.async { [weak self] in
+            defer { DispatchQueue.main.async { self?.uploading.remove(id) } }
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+            defer { try? handle.close() }
+            let inFlight = DispatchSemaphore(value: 4)
+            let failedLock = NSLock()
+            var failed = false
+            var position = offset
+            do { try handle.seek(toOffset: UInt64(offset)) } catch { return }
+            while true {
+                failedLock.lock(); let stop = failed; failedLock.unlock()
+                if stop || !link.hasReadyPeer { break }
+                guard let data = try? handle.read(upToCount: 4 << 20), !data.isEmpty else { break }
+                if inFlight.wait(timeout: .now() + 30) == .timedOut { break }
+                link.sendFileChunk(id: id, offset: position, data: data) { ok in
+                    if !ok { failedLock.lock(); failed = true; failedLock.unlock() }
+                    inFlight.signal()
                 }
+                position += Int64(data.count)
             }
+            // Let the last pieces go out before this take can be picked up again.
+            for _ in 0 ..< 4 { _ = inFlight.wait(timeout: .now() + 30) }
         }
     }
 
@@ -916,7 +955,7 @@ final class CameraAppModel: ObservableObject {
             takeNumber: currentNumber,
             elapsed: elapsed,
             camera: settings.frontCamera ? "Front" : "Back",
-            resolution: settings.uhd ? "4K" : "1080p",
+            resolution: activeMode?.label ?? (settings.uhd ? "4K" : "1080p"),
             gesture: gestureProgress?.gesture.rawValue,
             gestureProgress: gestureProgress?.progress ?? 0,
             pendingUploads: store.pendingCount,

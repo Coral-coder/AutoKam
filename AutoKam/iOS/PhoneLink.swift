@@ -25,6 +25,9 @@ final class PhoneLink: ObservableObject {
     private var peer: PeerConnection?
     private let peerLock = NSLock()
     private var readyPeer: PeerConnection?
+    /// A second connection just for take files, so they never hold up the live view.
+    private var bulk: PeerConnection?
+    private var readyBulk: PeerConnection?
 
     init() {
         preferredName = UserDefaults.standard.string(forKey: "preferredMac")
@@ -55,6 +58,7 @@ final class PhoneLink: ObservableObject {
         peer?.close()
         peer = nil
         setReady(nil)
+        closeBulk()
         connectedName = nil
         connectingName = nil
         connect(mac)
@@ -76,6 +80,49 @@ final class PhoneLink: ObservableObject {
     }
 
     var hasReadyPeer: Bool { currentReadyPeer() != nil }
+
+    /// Thread-safe. Sends a piece of a take file on the file connection (or the main one
+    /// until that's up). Bytes queued for sending, for pacing.
+    func sendFileChunk(id: UUID, offset: Int64, data: Data, completion: @escaping (Bool) -> Void) {
+        peerLock.lock()
+        let target = readyBulk ?? readyPeer
+        peerLock.unlock()
+        guard let target else { completion(false); return }
+        target.send(.chunk(id: id, offset: offset), payload: data, completion: completion)
+    }
+
+    private func openBulk(_ endpoint: NWEndpoint) {
+        closeBulk()
+        let connection = NWConnection(to: endpoint, using: AutoKamService.tcpParameters())
+        let newBulk = PeerConnection(connection)
+        bulk = newBulk
+        newBulk.onReady = { [weak self, weak newBulk] in
+            guard let self, let newBulk, self.bulk === newBulk else { return }
+            self.peerLock.lock(); self.readyBulk = newBulk; self.peerLock.unlock()
+            newBulk.send(.hello(name: UIDevice.current.name, role: "files", version: AutoKamService.protocolVersion))
+        }
+        newBulk.onMessage = { [weak self] message, payload in
+            self?.onMessage?(message, payload)
+        }
+        newBulk.onClose = { [weak self, weak newBulk] in
+            guard let self, self.bulk === newBulk else { return }
+            self.bulk = nil
+            self.peerLock.lock(); self.readyBulk = nil; self.peerLock.unlock()
+            // Reopen while the main connection is up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self, self.peer != nil, self.connectedName != nil, self.bulk == nil else { return }
+                self.openBulk(endpoint)
+            }
+        }
+        newBulk.start()
+    }
+
+    private func closeBulk() {
+        let old = bulk
+        bulk = nil
+        peerLock.lock(); readyBulk = nil; peerLock.unlock()
+        old?.close()
+    }
 
     // MARK: - Private
 
@@ -119,6 +166,7 @@ final class PhoneLink: ObservableObject {
             self.connectedName = mac.name
             self.setReady(newPeer)
             newPeer.send(.hello(name: UIDevice.current.name, role: "camera", version: AutoKamService.protocolVersion))
+            self.openBulk(mac.endpoint)
             self.onConnected?()
         }
         newPeer.onMessage = { [weak self] message, payload in
@@ -128,6 +176,7 @@ final class PhoneLink: ObservableObject {
             guard let self, self.peer === newPeer else { return }
             self.peer = nil
             self.setReady(nil)
+            self.closeBulk()
             self.connectedName = nil
             self.connectingName = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.autoConnect() }
