@@ -319,7 +319,7 @@ final class CameraAppModel: ObservableObject {
 
     // Read on the capture queue.
     private var previewEnabled = true
-    private var previewMirrored = true
+    private var previewMirrored = false // the Mac view matches the recording: never mirrored
 
     init() {
         let defaults = UserDefaults.standard
@@ -336,7 +336,6 @@ final class CameraAppModel: ObservableObject {
         segment = max(1, defaults.integer(forKey: "segment"))
         segmentTake = max(1, defaults.integer(forKey: "segmentTake"))
         previewEnabled = settings.sendPreview
-        previewMirrored = settings.frontCamera
         wire()
     }
 
@@ -539,16 +538,22 @@ final class CameraAppModel: ObservableObject {
     }
 
     /// Size of the gesture corner, as a share of the frame.
-    private static let zoneSize = CGSize(width: 0.42, height: 0.36)
+    private static let zoneSize = CGSize(width: 0.45, height: 0.4)
+
+    /// Inside the corner nothing else can set a gesture off, so read it as loosely as possible
+    /// (unless she picked Low).
+    private var currentTuning: GestureTuning {
+        if settings.gestureMode == .corner && settings.gestureSpeed != .careful { return .corner }
+        return settings.gestureSpeed.tuning
+    }
 
     /// Tells the detector which gestures count where, and places the corner on screen.
     private func applyGestureMode() {
+        gestures.tuning = currentTuning
         gestures.requireBothHands = settings.gestureMode == .bothHands
         if settings.gestureMode == .corner {
-            // The front camera's preview is mirrored, so the corner she sees on screen is the
-            // other side of the picture the detector looks at.
-            let screenRight = settings.cornerSide == .right
-            let pictureRight = settings.frontCamera ? !screenRight : screenRight
+            // The preview isn't mirrored, so the corner on screen is the same corner of the picture.
+            let pictureRight = settings.cornerSide == .right
             let w = Self.zoneSize.width, h = Self.zoneSize.height
             gestures.zone = CGRect(x: pictureRight ? 1 - w : 0, y: 1 - h, width: w, height: h)
         } else {
@@ -701,7 +706,7 @@ final class CameraAppModel: ObservableObject {
     // MARK: - Private
 
     private func wire() {
-        gestures.tuning = settings.gestureSpeed.tuning
+        gestures.tuning = currentTuning
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
         gestures.debug = settings.gestureDebug
@@ -780,8 +785,13 @@ final class CameraAppModel: ObservableObject {
     }
 
     private func applyPreviewAngle(_ angle: CGFloat) {
-        guard let connection = previewLayer?.connection, connection.isVideoRotationAngleSupported(angle) else { return }
-        connection.videoRotationAngle = angle
+        guard let connection = previewLayer?.connection else { return }
+        // Show the picture the way it's recorded — not mirrored, even on the front camera.
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+        }
+        if connection.isVideoRotationAngleSupported(angle) { connection.videoRotationAngle = angle }
     }
 
     func cycleOrientation() {
@@ -814,7 +824,7 @@ final class CameraAppModel: ObservableObject {
         if let data = try? JSONEncoder().encode(settings) {
             UserDefaults.standard.set(data, forKey: "settings")
         }
-        gestures.tuning = settings.gestureSpeed.tuning
+        gestures.tuning = currentTuning
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
         gestures.debug = settings.gestureDebug
@@ -823,7 +833,6 @@ final class CameraAppModel: ObservableObject {
         gestures.enabled = settings.gesturesEnabled
         if !settings.gesturesEnabled { gestureProgress = nil }
         previewEnabled = settings.sendPreview
-        previewMirrored = settings.frontCamera
         if cameraReady && (old.frontCamera != settings.frontCamera || old.uhd != settings.uhd || old.fps != settings.fps) {
             configureCamera()
         }
