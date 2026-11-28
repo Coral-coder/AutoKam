@@ -29,13 +29,13 @@ enum Walkthrough {
             "The meter on the right shows left and right levels as you talk.",
             "A small yellow note appears if the external mic isn't connected, or if a take starts and no sound is coming in. Tap it to hide it for a couple of minutes.",
         ]),
-        WalkthroughPage(symbol: "hand.raised.fill", title: "4 · Hand gestures — use both hands", lines: [
-            "Every gesture takes both hands making the same shape at the same time, held still for a moment. One hand on its own — holding a product or a mirror, talking — never triggers anything.",
-            "✋✋  Both hands open: start recording. While recording it means \"goofed\": that take is tossed and the same segment counts in again.",
-            "✊✊  Two fists: cut. This take is kept, then the next segment counts in, so there's time to drop your hands.",
-            "👍👍  Two thumbs up: keep this take and stop.",
-            "✌️✌️  Two peace signs: stop without keeping.",
-            "A ring fills while it's being read, then a ✓ and a sound confirm it. Tap the gesture bar at the top to pause gestures; Settings → Gestures has the sensitivity and a one-hand mode.",
+        WalkthroughPage(symbol: "hand.raised.fill", title: "4 · Hand gestures — in the corner", lines: [
+            "A box is drawn in the top corner of the camera screen. Make the gesture with one hand inside that box and hold it still for a moment. Hands anywhere else — holding a product or a mirror, talking — are ignored.",
+            "✋  Open hand: start recording. While recording it means \"goofed\": that take is tossed and the same segment counts in again.",
+            "✊  Fist: cut. This take is kept, then the next segment counts in, so there's time to drop your hand.",
+            "👍  Thumbs up: keep this take and stop.",
+            "✌️  Peace sign: stop without keeping.",
+            "The box turns green when it sees your hand, a ring fills while the gesture is read, then a ✓ and a sound confirm it. Settings → Gestures: which corner, Both-hands mode, sensitivity. Tap the gesture bar to pause gestures.",
         ]),
         WalkthroughPage(symbol: "film.stack", title: "5 · Segments and takes", lines: [
             "A video is built from segments, and each segment can take a few tries.",

@@ -38,6 +38,32 @@ struct FocusReticle: View {
     }
 }
 
+/// The corner where one-hand gestures are read. Lights up when a hand is in it.
+struct GestureZone: View {
+    let rect: CGRect
+    let active: Bool
+
+    var body: some View {
+        GeometryReader { _ in
+            ZStack(alignment: .top) {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(active ? Color.green.opacity(0.18) : Color.clear)
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(active ? Color.green : Color.white.opacity(0.7),
+                                  style: StrokeStyle(lineWidth: active ? 3 : 2, dash: active ? [] : [8, 6]))
+                Text(active ? "HAND SEEN" : "GESTURES HERE")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundStyle(active ? Color.green : Color.white)
+                    .shadow(color: .black.opacity(0.6), radius: 1)
+                    .padding(.top, 6)
+            }
+            .frame(width: rect.width, height: rect.height)
+            .position(x: rect.midX, y: rect.midY)
+            .animation(.easeOut(duration: 0.15), value: active)
+        }
+    }
+}
+
 /// Four corner brackets.
 struct FocusBrackets: Shape {
     func path(in rect: CGRect) -> Path {

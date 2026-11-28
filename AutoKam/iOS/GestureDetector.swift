@@ -22,6 +22,9 @@ struct GestureTuning {
                                     maxTilt: 75, stillness: 0.9, minFrames: 3)
     static let medium = GestureTuning(hold: 0.4, jointConfidence: 0.25, straight: 148, bent: 122,
                                       maxTilt: 65, stillness: 0.7, minFrames: 4)
+    /// For the gesture corner: as loose as it gets, since only a hand in the corner is read.
+    static let corner = GestureTuning(hold: 0.25, jointConfidence: 0.12, straight: 128, bent: 140,
+                                      maxTilt: 85, stillness: 1.3, minFrames: 3)
     static let low = GestureTuning(hold: 0.6, jointConfidence: 0.35, straight: 158, bent: 110,
                                    maxTilt: 50, stillness: 0.5, minFrames: 6)
 }
@@ -68,6 +71,12 @@ final class GestureDetector {
     /// Gestures need both hands making the same shape at once. One hand on its own (holding
     /// something, talking) can't trigger anything.
     var requireBothHands = true
+    /// When set, a one-hand gesture only counts inside this part of the frame (upright picture,
+    /// 0–1, y up). Hands anywhere else are ignored.
+    var zone: CGRect?
+    /// Whether a hand is in the gesture corner right now. Main queue.
+    var onHandInZone: ((Bool) -> Void)?
+    private var lastHandInZone = false
     /// Where a shown object is, in upright frame coordinates (0–1, origin top-left), or nil
     /// once the hand has gone. Main queue.
     var onShowing: ((CGPoint?) -> Void)?
@@ -112,17 +121,31 @@ final class GestureDetector {
             let aspect = height > 0 ? width / height : 1
             if (try? handler.perform([request])) != nil, let hands = request.results {
                 var sightings: [Sighting] = []
+                var anyInZone = false
+                let zone = requireBothHands ? nil : self.zone
                 for hand in hands where hand.confidence >= 0.2 {
                     handSeen = true
                     let t = tuning
-                    if debug { debugLines.append(Self.describe(hand, aspect: aspect, t: t)) }
-                    if let sighting = Self.classify(hand, aspect: aspect, t: t) {
+                    let inZone = zone.map { Self.hand(hand, isIn: $0) } ?? true
+                    if inZone && zone != nil { anyInZone = true }
+                    if debug {
+                        let place = zone == nil ? "" : (inZone ? "  [in corner]" : "  [outside corner]")
+                        debugLines.append(Self.describe(hand, aspect: aspect, t: t) + place)
+                    }
+                    if inZone, let sighting = Self.classify(hand, aspect: aspect, t: t) {
                         if !disabled.contains(sighting.gesture) { sightings.append(sighting) }
                     } else if shown == nil, let object = Self.showingObject(hand, aspect: aspect) {
                         shown = object
                     }
                 }
                 found = requireBothHands ? Self.bothHands(sightings) : sightings.first
+                if anyInZone != lastHandInZone {
+                    lastHandInZone = anyInZone
+                    DispatchQueue.main.async { self.onHandInZone?(anyInZone) }
+                }
+            } else if lastHandInZone {
+                lastHandInZone = false
+                DispatchQueue.main.async { self.onHandInZone?(false) }
             }
             if debug {
                 let text = debugLines.isEmpty ? "no hand" : debugLines.joined(separator: "\n")
@@ -347,6 +370,22 @@ final class GestureDetector {
             return Sighting(gesture: .fist, wrist: wrist, scale: scale)
         }
         return nil
+    }
+
+    /// The hand is in the gesture corner: its middle, wrist or middle knuckle is inside the box
+    /// (with a little slack at the edges), so a hand only partly in the box still counts.
+    private static func hand(_ observation: VNHumanHandPoseObservation, isIn zone: CGRect) -> Bool {
+        guard let points = try? observation.recognizedPoints(.all) else { return false }
+        let box = zone.insetBy(dx: -0.04, dy: -0.04)
+        let seen = points.values.filter { $0.confidence >= 0.1 }
+        guard !seen.isEmpty else { return false }
+        let center = CGPoint(x: seen.map(\.location.x).reduce(0, +) / CGFloat(seen.count),
+                             y: seen.map(\.location.y).reduce(0, +) / CGFloat(seen.count))
+        if box.contains(center) { return true }
+        for joint in [VNHumanHandPoseObservation.JointName.wrist, .middleMCP] {
+            if let p = points[joint], p.confidence >= 0.1, box.contains(p.location) { return true }
+        }
+        return false
     }
 
     /// Two separate hands showing the same gesture. Reported at the point between them.
