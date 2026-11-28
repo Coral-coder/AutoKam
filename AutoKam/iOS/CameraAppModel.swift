@@ -25,6 +25,24 @@ enum GestureSpeed: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum GestureMode: String, Codable, CaseIterable, Identifiable {
+    case corner, bothHands, anywhere
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .corner: return "One hand, in the corner"
+        case .bothHands: return "Both hands, anywhere"
+        case .anywhere: return "One hand, anywhere"
+        }
+    }
+}
+
+enum CornerSide: String, Codable, CaseIterable, Identifiable {
+    case left, right
+    var id: String { rawValue }
+    var label: String { self == .left ? "Top left" : "Top right" }
+}
+
 enum VideoQuality: String, Codable, CaseIterable, Identifiable {
     case standard, high, max
     var id: String { rawValue }
@@ -69,7 +87,8 @@ struct CaptureSettings: Codable, Equatable {
     var showLevel = true
     var focusOnShownObjects = true
     var gestureDebug = false
-    var bothHands = true
+    var gestureMode = GestureMode.corner
+    var cornerSide = CornerSide.right
 
     init() {}
 
@@ -100,7 +119,8 @@ struct CaptureSettings: Codable, Equatable {
         showLevel = try c.decodeIfPresent(Bool.self, forKey: .showLevel) ?? d.showLevel
         focusOnShownObjects = try c.decodeIfPresent(Bool.self, forKey: .focusOnShownObjects) ?? d.focusOnShownObjects
         gestureDebug = try c.decodeIfPresent(Bool.self, forKey: .gestureDebug) ?? d.gestureDebug
-        bothHands = try c.decodeIfPresent(Bool.self, forKey: .bothHands) ?? d.bothHands
+        gestureMode = try c.decodeIfPresent(GestureMode.self, forKey: .gestureMode) ?? d.gestureMode
+        cornerSide = try c.decodeIfPresent(CornerSide.self, forKey: .cornerSide) ?? d.cornerSide
     }
 }
 
@@ -227,6 +247,10 @@ final class CameraAppModel: ObservableObject {
     @Published private(set) var gestureProgress: GestureProgress?
     /// What the phone sees per finger (Settings → Gestures → Show what it sees).
     @Published private(set) var gestureDebugText: String?
+    /// The gesture corner on screen (preview coordinates), when gestures use the corner.
+    @Published private(set) var zoneScreenRect: CGRect?
+    /// A hand is in the gesture corner right now.
+    @Published private(set) var handInZone = false
     @Published private(set) var toast: Toast?
     @Published private(set) var flashColor: Color?
     @Published private(set) var cameraReady = false
@@ -514,8 +538,42 @@ final class CameraAppModel: ObservableObject {
         focus.set(converted.bounds.insetBy(dx: -converted.bounds.width * 0.1, dy: -converted.bounds.height * 0.1), mode: .face)
     }
 
+    /// Size of the gesture corner, as a share of the frame.
+    private static let zoneSize = CGSize(width: 0.42, height: 0.36)
+
+    /// Tells the detector which gestures count where, and places the corner on screen.
+    private func applyGestureMode() {
+        gestures.requireBothHands = settings.gestureMode == .bothHands
+        if settings.gestureMode == .corner {
+            // The front camera's preview is mirrored, so the corner she sees on screen is the
+            // other side of the picture the detector looks at.
+            let screenRight = settings.cornerSide == .right
+            let pictureRight = settings.frontCamera ? !screenRight : screenRight
+            let w = Self.zoneSize.width, h = Self.zoneSize.height
+            gestures.zone = CGRect(x: pictureRight ? 1 - w : 0, y: 1 - h, width: w, height: h)
+        } else {
+            gestures.zone = nil
+        }
+        updateZoneOnScreen()
+    }
+
+    private func updateZoneOnScreen() {
+        guard settings.gestureMode == .corner, settings.gesturesEnabled, let layer = previewLayer,
+              layer.connection != nil else {
+            if zoneScreenRect != nil { zoneScreenRect = nil }
+            return
+        }
+        // Where the picture sits on screen (the preview letterboxes it).
+        let video = layer.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard video.width > 0, video.height > 0 else { return }
+        let w = video.width * Self.zoneSize.width, h = video.height * Self.zoneSize.height
+        let rect = CGRect(x: settings.cornerSide == .right ? video.maxX - w : video.minX, y: video.minY, width: w, height: h)
+        if zoneScreenRect != rect { zoneScreenRect = rect }
+    }
+
     /// Without a face, autofocus works on the middle of the frame (or the tapped point).
     private func refreshAutoFocusTarget() {
+        updateZoneOnScreen()
         guard let layer = previewLayer else { return }
         if let manual = manualFocusPoint {
             let p = layer.layerPointConverted(fromCaptureDevicePoint: manual)
@@ -647,7 +705,10 @@ final class CameraAppModel: ObservableObject {
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
         gestures.debug = settings.gestureDebug
-        gestures.requireBothHands = settings.bothHands
+        applyGestureMode()
+        gestures.onHandInZone = { [weak self] inZone in
+            if self?.handInZone != inZone { self?.handInZone = inZone }
+        }
         gestures.onDebug = { [weak self] text in
             guard let self, self.settings.gestureDebug, self.gestureDebugText != text else { return }
             self.gestureDebugText = text
@@ -757,7 +818,7 @@ final class CameraAppModel: ObservableObject {
         gestures.disabled = Set(settings.disabledGestures.compactMap(HandGesture.init(rawValue:)))
         gestures.detectShowing = settings.focusOnShownObjects
         gestures.debug = settings.gestureDebug
-        gestures.requireBothHands = settings.bothHands
+        applyGestureMode()
         if !settings.gestureDebug { gestureDebugText = nil }
         gestures.enabled = settings.gesturesEnabled
         if !settings.gesturesEnabled { gestureProgress = nil }

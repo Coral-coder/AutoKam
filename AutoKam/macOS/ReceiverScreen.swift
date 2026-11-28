@@ -89,11 +89,11 @@ private struct PhonePane: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(HandGesture.allCases, id: \.self) { gesture in
                         HStack {
-                            Text(gesture.emoji + gesture.emoji).frame(width: 44)
+                            Text(gesture.emoji).frame(width: 26)
                             Text(gesture.meaning)
                         }
                     }
-                    Text("Both hands, same shape, held for a moment. Every take lands in All Takes; kept takes (✊ and 👍) are also copied to Good Takes with the gesture trimmed off — import that folder into your editor.")
+                    Text("One hand inside the corner box on the phone screen, held for a moment. Every take lands in All Takes; kept takes (✊ and 👍) are also copied to Good Takes with the gesture trimmed off — import that folder into your editor.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -68,6 +68,12 @@ final class GestureDetector {
     /// Gestures need both hands making the same shape at once. One hand on its own (holding
     /// something, talking) can't trigger anything.
     var requireBothHands = true
+    /// When set, a one-hand gesture only counts inside this part of the frame (upright picture,
+    /// 0–1, y up). Hands anywhere else are ignored.
+    var zone: CGRect?
+    /// Whether a hand is in the gesture corner right now. Main queue.
+    var onHandInZone: ((Bool) -> Void)?
+    private var lastHandInZone = false
     /// Where a shown object is, in upright frame coordinates (0–1, origin top-left), or nil
     /// once the hand has gone. Main queue.
     var onShowing: ((CGPoint?) -> Void)?
@@ -112,17 +118,31 @@ final class GestureDetector {
             let aspect = height > 0 ? width / height : 1
             if (try? handler.perform([request])) != nil, let hands = request.results {
                 var sightings: [Sighting] = []
+                var anyInZone = false
+                let zone = requireBothHands ? nil : self.zone
                 for hand in hands where hand.confidence >= 0.2 {
                     handSeen = true
                     let t = tuning
-                    if debug { debugLines.append(Self.describe(hand, aspect: aspect, t: t)) }
-                    if let sighting = Self.classify(hand, aspect: aspect, t: t) {
+                    let inZone = zone.map { Self.hand(hand, isIn: $0) } ?? true
+                    if inZone && zone != nil { anyInZone = true }
+                    if debug {
+                        let place = zone == nil ? "" : (inZone ? "  [in corner]" : "  [outside corner]")
+                        debugLines.append(Self.describe(hand, aspect: aspect, t: t) + place)
+                    }
+                    if inZone, let sighting = Self.classify(hand, aspect: aspect, t: t) {
                         if !disabled.contains(sighting.gesture) { sightings.append(sighting) }
                     } else if shown == nil, let object = Self.showingObject(hand, aspect: aspect) {
                         shown = object
                     }
                 }
                 found = requireBothHands ? Self.bothHands(sightings) : sightings.first
+                if anyInZone != lastHandInZone {
+                    lastHandInZone = anyInZone
+                    DispatchQueue.main.async { self.onHandInZone?(anyInZone) }
+                }
+            } else if lastHandInZone {
+                lastHandInZone = false
+                DispatchQueue.main.async { self.onHandInZone?(false) }
             }
             if debug {
                 let text = debugLines.isEmpty ? "no hand" : debugLines.joined(separator: "\n")
@@ -347,6 +367,14 @@ final class GestureDetector {
             return Sighting(gesture: .fist, wrist: wrist, scale: scale)
         }
         return nil
+    }
+
+    /// The wrist and the middle of the hand are both inside the gesture corner.
+    private static func hand(_ observation: VNHumanHandPoseObservation, isIn zone: CGRect) -> Bool {
+        guard let points = try? observation.recognizedPoints(.all),
+              let wrist = points[.wrist], wrist.confidence >= 0.2,
+              let knuckle = points[.middleMCP], knuckle.confidence >= 0.2 else { return false }
+        return zone.contains(wrist.location) && zone.contains(knuckle.location)
     }
 
     /// Two separate hands showing the same gesture. Reported at the point between them.
